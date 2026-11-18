@@ -270,11 +270,14 @@ class AlignHelpers(QWidget):
                 self.pairs.removeRow(row)
 
     def pair_points(self) -> tuple[np.ndarray, np.ndarray]:
+        from puzzle.gui.field_wizard import _numbers  # in words, never float()s (PANEL-34)
+
         out = []
         for row in range(self.pairs.rowCount()):
             cells = [self.pairs.item(row, k) for k in range(6)]
-            out.append([float(c.text()) / self.per_metre if c and c.text() else 0.0
-                        for c in cells])  # fmt: skip
+            texts = [c.text() if c is not None else "" for c in cells]
+            out.append([v / self.per_metre for v in
+                        _numbers(texts, f"Pair {row + 1}", blank=0.0)])  # fmt: skip
         table = np.array(out, float).reshape(-1, 6)
         return table[:, :3], table[:, 3:]
 
@@ -286,7 +289,13 @@ class AlignHelpers(QWidget):
         self.wizard_.window.viewport.capture_point(self._data_picked, snap="none")
 
     def _data_picked(self, xyz) -> None:
-        placed = self.placed()
+        if xyz is None:  # cancelled
+            return
+        try:
+            placed = self.placed()
+        except ValueError as exc:  # a half-typed field: said, never a popup (PANEL-34)
+            self._say(str(exc))
+            return
         i = int(np.argmin(np.linalg.norm(placed - np.asarray(xyz), axis=1)))
         base, _, _ = self.data()
         self._picked = base[i]
@@ -302,8 +311,8 @@ class AlignHelpers(QWidget):
     def from_pairs(self):
         from puzzle.field_align import from_point_pairs
 
-        data, model = self.pair_points()
         try:
+            data, model = self.pair_points()
             fit = from_point_pairs(data, model, about=self._current().about,
                                    axes=self._current().axes)  # fmt: skip
         except Exception as exc:  # noqa: BLE001 - a PuzzleError in words
@@ -327,8 +336,12 @@ class AlignHelpers(QWidget):
 
         def run(mesh, selection) -> None:
             _, nodes = selection_nodes(mesh, selection)
-            base, _, _ = self.data()
-            current = self._current()
+            try:
+                base, _, _ = self.data()
+                current = self._current()
+            except ValueError as exc:
+                self._say(str(exc))
+                return
             fit = match_boxes(base, nodes, order=self.order.isChecked(), about=current.about,
                               axes=current.axes)  # fmt: skip
             self.set_placement(fit.placement)
@@ -353,8 +366,12 @@ class AlignHelpers(QWidget):
 
         def run(mesh, selection) -> None:
             surface = target_surface(mesh, selection)
-            base, _, _ = self.data()
-            start = self._current()
+            try:
+                base, _, _ = self.data()
+                start = self._current()
+            except ValueError as exc:
+                self._say(str(exc))
+                return
 
             def work(_emit):
                 return best_fit(base, surface if surface is not None else mesh.coords, start)

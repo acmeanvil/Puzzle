@@ -254,10 +254,12 @@ def _steps(text: str) -> tuple[int, ...]:
 
 
 def _cycles(text: str) -> float | None:
+    from puzzle.model.units import parse_number
+
     text = (text or "").strip()
     if not text:
         return None
-    value = float(text)
+    value = parse_number(text, "cycles")
     if value <= 0:
         raise ValueError("cycles must be positive")
     return value

@@ -50,18 +50,23 @@ def list_operators(project) -> list[tuple[str, str]]:
 def _values(text: str, unit: str) -> list[dict]:
     """ "2, 4, 6 mm" or "2 mm, 4 mm": the last unit given covers the bare numbers."""
     from puzzle.gui.properties import parse_list
+    from puzzle.model.units import parse_quantity
 
     items = parse_list(text or "")
     if not items:
         raise ValueError("list the values, comma separated")
-    last = next((i.partition(" ")[2] for i in reversed(items) if i.partition(" ")[2]), "")
-    return [quantity(i, last.strip() or unit) for i in items]
+    kind = "any" if unit == "dimensionless" else None  # an operator's: any unit it reads
+    given = [parse_quantity(i, unit, kind)[1] for i in items]
+    typed = [g for i, g in zip(items, given, strict=True) if not i.strip()[-1:].isdigit()]
+    last = typed[-1] if typed else unit
+    return [quantity(i, last, kind) for i in items]
 
 
 def _range(start: str, end: str, count: str, unit: str) -> list[dict]:
     from puzzle.model.units import convert
 
-    a, b = quantity(start, unit), quantity(end, unit)
+    kind = "any" if unit == "dimensionless" else None
+    a, b = quantity(start, unit, kind), quantity(end, unit, kind)
     try:
         n = int(count)
     except ValueError:
@@ -111,14 +116,21 @@ def _count(project, params: list[dict], combination: str) -> int | None:
     return math.prod(lengths)
 
 
+def _number(value: float) -> str:
+    """Every digit a value has, shortest (repr): read back, it is the same float, so a
+    sweep reopened and accepted keeps its points' run keys (PANEL-9)."""
+    text = repr(float(value))
+    return text[:-2] if text.endswith(".0") else text
+
+
 def _text(values: list) -> str:
     """A parameter's values as typed back: "2, 4, 6 mm"."""
     units = {v.unit for v in values}
     if len(units) == 1:
         unit = next(iter(units))
         tail = "" if unit == "dimensionless" else f" {unit}"
-        return ", ".join(f"{v.value:g}" for v in values) + tail
-    return ", ".join(f"{v.value:g} {v.unit}" for v in values)
+        return ", ".join(_number(v.value) for v in values) + tail
+    return ", ".join(f"{_number(v.value)} {v.unit}" for v in values)
 
 
 def sweep_step(window, study, index: int | None = None):
@@ -144,12 +156,19 @@ def sweep_step(window, study, index: int | None = None):
     if ops:
         hows.append(("From a list operator", "operator"))
     asks = []
+    missing: dict[str, str] = {}  # a stored source no longer a list operator (PANEL-20)
     for name in sorted(units):
         p = given.get(name)
         how = "none" if p is None else ("operator" if p.source else "list")
+        offered = list(ops)
+        if p is not None and p.source and str(p.source) not in {v for _, v in ops}:
+            missing[name] = str(p.source)
+            offered.append(("An operator no longer offered (deleted, or not a list)",
+                            str(p.source)))  # fmt: skip
+        name_hows = hows if not offered or ops else [*hows, ("From a list operator", "operator")]
         shown_unit = "" if units[name] == "dimensionless" else f" {units[name]}"
         asks += [
-            Ask(f"how:{name}", name, choices=hows, default=how),
+            Ask(f"how:{name}", name, choices=name_hows, default=how),
             Ask(f"values:{name}", f"{name}: values", kind="text",
                 default=_text(p.values) if p is not None and not p.source else "",
                 shown=lambda v, n=name: v.get(f"how:{n}") == "list",
@@ -161,8 +180,8 @@ def sweep_step(window, study, index: int | None = None):
             Ask(f"count:{name}", f"{name}: how many values", kind="text", default="5",
                 shown=lambda v, n=name: v.get(f"how:{n}") == "range"),
         ]  # fmt: skip
-        if ops:
-            asks.append(Ask(f"source:{name}", f"{name}: operator", choices=ops,
+        if offered:
+            asks.append(Ask(f"source:{name}", f"{name}: operator", choices=offered,
                             default=str(p.source) if p is not None and p.source else None,
                             shown=lambda v, n=name: v.get(f"how:{n}") == "operator"))  # fmt: skip
     asks.append(Ask("combination", "Combine", choices=COMBINATIONS,
@@ -173,6 +192,10 @@ def sweep_step(window, study, index: int | None = None):
         return sweep_steps(study, parameters(v, units), v.get("combination", "grid"), index)
 
     def check(v):
+        for name, source in missing.items():
+            if v.get(f"how:{name}") == "operator" and v.get(f"source:{name}") == source:
+                return (f"{name}'s list operator is gone or no longer gives a list: choose "
+                        "another, or another way to sweep it")  # fmt: skip
         try:
             params = parameters(v, units)
         except (ValueError, KeyError) as exc:

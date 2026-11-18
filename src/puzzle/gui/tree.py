@@ -331,9 +331,10 @@ class ModelTree(QTreeWidget):
         defined = project.of_type(ResultDefinition)
         probes = project.of_type(ResultProbe)
         if runs or defined or probes:
+            from puzzle.gui.result_tools import title
             from puzzle.post.derived import METHODS
             from puzzle.post.quantities import catalog as results_of
-            from puzzle.sweep import title
+            from puzzle.sweep import title as point_title  # not result_tools' (GUI-25)
 
             section = self._add(root, "Results", Node("section", label="Results"))
             _section_icon(section, "Results")
@@ -342,8 +343,6 @@ class ModelTree(QTreeWidget):
                 item = self._add(section, text, Node("derived", str(d.id), "", d.name))
                 self._state(item, states.get(str(d.id)))
             for p in probes:  # result tools (ADR 0032, 0042), read again for each run
-                from puzzle.gui.result_tools import title
-
                 text = title(p)
                 item = self._add(section, text, Node("probe", str(p.id), "", p.name))
                 self._state(item, states.get(str(p.source)))
@@ -365,7 +364,7 @@ class ModelTree(QTreeWidget):
                         sweeps[r.study_id] = (head, set())
                         self._add(head, "Compare…", Node("compare", r.study_id, "", "Compare"))
                     head, seen = sweeps[r.study_id]
-                    point = title(labels)
+                    point = point_title(labels)
                     if point in seen:  # an older run of the same point
                         continue
                     seen.add(point)
@@ -395,7 +394,7 @@ class ModelTree(QTreeWidget):
             node = item.data(0, ROLE)
             if self._key(item) in opened or node.kind in ("project", "section"):
                 item.setExpanded(True)
-            if keep is not None and node == keep:
+            if keep is not None and chosen is None and _same(node, keep):  # GUI-23
                 chosen = item
         # Selected after the loop: selecting fires the window's handlers, which can
         # rebuild the tree and delete the items still to come ("already deleted").
@@ -702,8 +701,8 @@ class ModelTree(QTreeWidget):
 
     @staticmethod
     def _key(item: QTreeWidgetItem) -> tuple:
-        node = item.data(0, ROLE)
-        return (node.kind, node.object, node.path, node.label)
+        node = item.data(0, ROLE)  # by what it is, not its label: a rename keeps it open
+        return (node.kind, node.object, node.path, node.key, _anonymous_label(node))
 
 
 NOUNS = {
@@ -751,10 +750,19 @@ def _feature_label(physics: str, kind: str) -> str:
 
 
 def _same(a: Node, b: Node) -> bool:
-    """The same thing (labels may differ); default folders also by which folder."""
-    return (a.kind, a.object, a.path) == (b.kind, b.object, b.path) and (
-        a.kind != "folder" or a.key == b.key
+    """The same thing (labels may differ); default folders also by which folder, and
+    things with no object or path (the project, sections) by their label."""
+    return (
+        (a.kind, a.object, a.path) == (b.kind, b.object, b.path)
+        and (a.kind != "folder" or a.key == b.key)
+        and _anonymous_label(a) == _anonymous_label(b)
     )
+
+
+def _anonymous_label(node: Node) -> str:
+    """The label of a node that is nothing but its label (a section heading)."""
+    anonymous = not node.object and not node.path and node.kind != "project"  # one project
+    return node.label if anonymous else ""
 
 
 def _uuid(text: str):

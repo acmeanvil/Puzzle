@@ -63,6 +63,19 @@ def _shown(values, per_metre: float) -> str:
     return ", ".join(f"{v * per_metre:.6g}" for v in values)
 
 
+def show_kept(line, text: str, value) -> None:
+    """A field shown short, its stored value kept: read back untouched, it is that value
+    to the last digit, so an Edit… then Apply never shifts what wasn't edited (PANEL-27)."""
+    line.setText(text)
+    line._kept = (line.text(), value)
+
+
+def read_kept(line, parse):
+    """The kept value while the text is as shown, else the text parsed."""
+    kept = getattr(line, "_kept", None)
+    return kept[1] if kept is not None and kept[0] == line.text() else parse(line.text())
+
+
 def bounds(window) -> tuple[np.ndarray, np.ndarray] | None:
     """The shown or last meshed model's extent (min, max), if any."""
     mesh = getattr(window.viewport, "mesh", None)
@@ -185,6 +198,7 @@ class PointRow(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         self.text = QLineEdit(_shown(xyz, panel.per_metre))
+        self.exact = (tuple(xyz), self.text.text())  # as given, to the last digit (PANEL-27)
         self.text.editingFinished.connect(panel.changed)
         self.pick = QToolButton()
         self.pick.setText("Pick")
@@ -207,9 +221,13 @@ class PointRow(QWidget):
             f"Double-click the model at {self.tip}{self.panel.snap_note()}", 15000
         )
 
-    def got(self, xyz) -> None:
+    def show(self, xyz) -> None:
+        """Show a point and keep it whole (an object's, a pick's)."""
         self.text.setText(_shown(xyz, self.panel.per_metre))
-        self.exact = (tuple(xyz), self.text.text())  # a picked node, to the last digit
+        self.exact = (tuple(float(v) for v in xyz), self.text.text())
+
+    def got(self, xyz) -> None:
+        self.show(xyz)  # a picked node, to the last digit
         self.pick.blockSignals(True)
         self.pick.setChecked(False)
         self.pick.blockSignals(False)
@@ -480,7 +498,8 @@ class PlanePanel(_Panel):
         for text, value in NORMALS:
             self.facing.addItem(text, value)
         self.facing.setCurrentIndex(self.facing.findData(which))
-        self.direction = QLineEdit(", ".join(f"{v:.6g}" for v in typed))
+        self.direction = QLineEdit()
+        show_kept(self.direction, ", ".join(f"{v:.6g}" for v in typed), tuple(typed))
         self.three = QPushButton("Through three points…")
         self.three.setToolTip("Double-click three points on the model, one after another")
         self.three.clicked.connect(self.pick_three)
@@ -495,7 +514,8 @@ class PlanePanel(_Panel):
             self.how.setCurrentIndex(self.how.findData("axes"))
             self.axes.setCurrentIndex(max(0, self.axes.findData(str(editing.axes))))
             self.plane.setCurrentIndex(max(0, self.plane.findData(editing.plane)))
-            self.offset.setText(f"{editing.offset * self.per_metre:.6g}")
+            show_kept(self.offset, f"{editing.offset * self.per_metre:.6g}",
+                      editing.offset * self.per_metre)  # fmt: skip
         rows = [
             ("Placed", self.how), (f"Through ({self.unit})", self.origin),
             ("Facing", self.facing), ("Direction (x, y, z)", self.direction),
@@ -551,8 +571,8 @@ class PlanePanel(_Panel):
                 self.message.setText("The three points are in a line: pick them again")
                 return
             n /= np.linalg.norm(n)
-            self.origin.text.setText(_shown(a, self.per_metre))
-            self.direction.setText(", ".join(f"{v:.6g}" for v in n))
+            self.origin.show(a)
+            show_kept(self.direction, ", ".join(f"{v:.6g}" for v in n), tuple(n))
             self.facing.setCurrentIndex(self.facing.findData("typed"))
             self.window.statusBar().clearMessage()
             self.changed()
@@ -564,7 +584,7 @@ class PlanePanel(_Panel):
 
     def normal(self):
         if self.facing.currentData() == "typed":
-            return _point(self.direction.text(), 1.0)
+            return read_kept(self.direction, lambda t: _point(t, 1.0))
         return AXIS[self.facing.currentData()]
 
     def _face(self) -> tuple[np.ndarray, np.ndarray, str]:
@@ -590,7 +610,7 @@ class PlanePanel(_Panel):
 
     def _offset(self) -> float | None:
         try:
-            return float(self.offset.text() or 0) / self.per_metre
+            return read_kept(self.offset, lambda t: float(t or 0)) / self.per_metre
         except ValueError:
             return None
 
@@ -625,7 +645,7 @@ class PlanePanel(_Panel):
         if self.by_point():
             return data | {"origin": list(self.origin.value()), "normal": list(self.normal())}
         return data | {"axes": self.axes.currentData(), "plane": self.plane.currentData(),
-                       "offset": float(self.offset.text() or 0) / self.per_metre}  # fmt: skip
+                       "offset": self._offset()}  # fmt: skip
 
     def preview(self) -> None:
         made = ConstructionGeometry(**self.data())

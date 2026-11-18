@@ -271,13 +271,14 @@ def format_value(value: Any) -> str:
     return json.dumps(value)
 
 
-STEPS = "steps"  # marks a feature's steps row, edited as text
-LISTED = "listed"  # marks an operator's list of names, edited as "a, b, c" (ADR 0064)
+# Row markers, never a value a field could hold (GUI-10: an object named "steps"):
+STEPS = "\x00steps"  # marks a feature's steps row, edited as text
+LISTED = "\x00listed"  # marks an operator's list of names, edited as "a, b, c" (ADR 0064)
 # An operator's lists of names: one row of text each, even when empty.
 TEXT_LISTS = {"pick": "Columns", "drop": "Columns left out", "by": "By",
               "aggregations": "Aggregations", "quantities": "Results",
               "labels": "Names"}  # fmt: skip
-QUANTITIES = "quantities"  # marks a list of quantities edited as "8 mm, 10 mm, 12 mm"
+QUANTITIES = "\x00quantities"  # marks a list of quantities edited as "8 mm, 10 mm, 12 mm"
 QUANTITY_LISTS = {"options": "Options"}  # a Choice's presets (ADR 0064A A4)
 
 
@@ -286,15 +287,12 @@ def quantities_text(values: list[dict]) -> str:
 
 
 def parse_quantities(text: str) -> list[dict]:
-    from puzzle.model.units import known, plain
+    from puzzle.model.units import parse_quantity
 
     out = []
     for part in parse_list(text):
-        number, _, unit = part.partition(" ")
-        unit = plain(unit.strip()) if unit.strip() else "dimensionless"
-        if not known(unit):
-            raise ValueError(f"unknown unit '{unit}'")
-        out.append({"value": float(number), "unit": unit})
+        value, unit = parse_quantity(part, "dimensionless", kind="any")
+        out.append({"value": value, "unit": unit})
     return out
 
 
@@ -316,7 +314,7 @@ def parse_list(text: str) -> list[str]:
     return [x for x in out if x]
 
 
-TYPED = "typed input"  # marks an operator's typed input row (ADR 0062)
+TYPED = "\x00typed input"  # marks an operator's typed input row (ADR 0062)
 SHOWN = Qt.ItemDataRole.UserRole + 7
 ALL_STEPS = "All steps"
 
@@ -330,7 +328,12 @@ def parse_steps(text: str) -> list[int]:
     text = text.strip()
     if not text or text.lower() in (ALL_STEPS.lower(), "all"):
         return []
-    steps = sorted({int(t) for t in text.replace(",", " ").split()})
+    try:
+        steps = sorted({int(t) for t in text.replace(",", " ").split()})
+    except ValueError:
+        raise ValueError(f"'{text}': steps are whole numbers, such as 2, 3") from None
+    if not steps:  # "," alone: every step, as an empty field (GUI-10)
+        return []
     if steps[0] < 1:
         raise ValueError("steps are numbered from 1")
     return steps
@@ -346,7 +349,7 @@ def parse_value(text: str, old: Any) -> Any:
         return parse_quantities(text)
     text = text.strip()
     if is_quantity(old):
-        from puzzle.model.units import plain, shown
+        from puzzle.model.units import parse_quantity, shown
         from puzzle.settings import current
 
         if text.startswith("="):  # "= t": the value follows parameter t (ADR 0071)
@@ -354,10 +357,10 @@ def parse_value(text: str, old: Any) -> Any:
             if not name:
                 raise ValueError("type a parameter's name after =, e.g. = t")
             return {"value": old["value"], "unit": old["unit"], "parameter": name}
-        number, _, unit = text.partition(" ")
-        if not unit.strip():  # a bare number is in the unit shown
-            unit = shown(old["value"], old["unit"], current().display_units())[1]
-        return {"value": float(number), "unit": plain(unit)}
+        # a bare number is in the unit shown; "5mm", "2,5 mm"; the unit checked (GUI-10)
+        unit = shown(old["value"], old["unit"], current().display_units())[1]
+        value, given = parse_quantity(text, unit)  # of the dimension the field holds
+        return {"value": value, "unit": given}
     if old is None and text in (NONE_TEXT, ""):
         return None
     if isinstance(old, str) or old is None:
@@ -375,6 +378,7 @@ class PropertiesPanel(QTreeWidget):
     """Shows one object (or part of one, from `path` down)."""
 
     edited = Signal(str, str, object)  # object id, dotted path, new value
+    refused = Signal(str)  # why a typed value was put back (GUI-10)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -606,20 +610,22 @@ class PropertiesPanel(QTreeWidget):
 
             try:
                 typed = parse_typed(item.text(1))
-            except ValueError:
+            except ValueError as exc:
                 self._filling = True
                 item.setText(1, item.data(1, SHOWN))
                 self._filling = False
+                self.refused.emit(str(exc))
                 return
             self.edited.emit(self.object_id, path, {} if typed is None else {"value": typed})
             return
         try:
             value = parse_value(item.text(1), old)
-        except ValueError:
+        except ValueError as exc:  # put back, and said why (GUI-10)
             self._filling = True
-            item.setText(1, item.data(1, SHOWN) if old in (STEPS, QUANTITIES)
+            item.setText(1, item.data(1, SHOWN) if old in (STEPS, QUANTITIES, LISTED)
                          else format_value(old))  # fmt: skip
             self._filling = False
+            self.refused.emit(str(exc) or "That value can't be read")
             return
         self.edited.emit(self.object_id, path, value)
 

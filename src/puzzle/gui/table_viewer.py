@@ -61,6 +61,9 @@ class TableViewer(QWidget):
 
         t = self.table
         frame = shown_frame(t)  # display (or converted) units, headers "name [unit]"
+        sort = getattr(self, "_sort", None)
+        if sort is not None and sort[0] < frame.width:  # the whole table, by value (PANEL-14)
+            frame = frame.sort(frame.columns[sort[0]], descending=sort[1], nulls_last=True)
         h = t.frame.height
         more = f" (the first {ROWS} shown)" if h > ROWS else ""
         self.title.setText(f"{self.op.name}: {h} row{'s' if h != 1 else ''} × "
@@ -86,4 +89,8 @@ class TableViewer(QWidget):
                 {"op": "set", "path": "descending", "value": descending}]}])  # fmt: skip
             self.show_table(self.window.session.project.objects[self.op.id])
             return
-        self.grid.sortItems(index)  # the view only
+        # The view only: the whole table sorted by value, not the rows drawn as text
+        # (PANEL-14); a second click turns the order round.
+        sort = getattr(self, "_sort", None)
+        self._sort = (index, not sort[1] if sort is not None and sort[0] == index else False)
+        self._draw()

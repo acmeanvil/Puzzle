@@ -13,8 +13,9 @@ analysis, physics, name. `ask_form` asks them together:
 - choices are (shown name, value) pairs, or a function of the values so far (they are
   rebuilt when an earlier field changes);
 - `shown` hides a field that doesn't apply (it is then left out of the values);
-- `follow` gives a text field a default that tracks the other fields until it is typed
-  in (a study's name follows its component and analysis);
+- `follow` gives a field a default that tracks the other fields until it is typed in or
+  chosen (a study's name follows its component and analysis; a thread's settings follow
+  the contact chosen);
 - `check` returns a message that blocks OK, shown at the top of the dialog.
 
 Tests fill the dialog through `window.run_dialog` and `QuickForm.set`.
@@ -54,7 +55,7 @@ class Ask:
     default: Any = None
     help: str = ""
     shown: Callable[[dict], bool] | None = None
-    follow: Callable[[dict], str] | None = None  # text: a default that tracks the others
+    follow: Callable[[dict], Any] | None = None  # a default that tracks the others
 
     def __post_init__(self) -> None:
         if self.kind == "choice" and not self.choices:
@@ -107,6 +108,7 @@ class QuickForm(QDialog):
         if a.kind == "choice":
             w = QComboBox()
             w.currentIndexChanged.connect(lambda _=0: self._changed())
+            w.activated.connect(lambda _=0, k=a.key: self._typed(k))  # chosen by a person
             self.widgets[a.key] = w
             self.form.addRow(a.label, w)
         elif a.kind == "text":
@@ -165,12 +167,14 @@ class QuickForm(QDialog):
                         w.clear()
                         for text, value in pairs:
                             w.addItem(text, value)
+                    if a.follow is not None and a.key not in self.typed:
+                        current = a.follow(values)
                     index = w.findData(current)
                     w.setCurrentIndex(index if index >= 0 else (0 if w.count() else -1))
                 if a.shown is not None:
                     visible = bool(a.shown(self.values(all_fields=True)))
                     self.form.setRowVisible(w if a.kind != "folder" else w.parentWidget(), visible)
-                if a.follow is not None and a.key not in self.typed:
+                if a.follow is not None and a.key not in self.typed and a.kind != "choice":
                     w.setText(a.follow(self.values(all_fields=True)))
         finally:
             self._building = False
@@ -205,6 +209,7 @@ class QuickForm(QDialog):
             if index < 0:
                 shown = [w.itemData(i) for i in range(w.count())]
                 raise ValueError(f"'{key}' has no choice {value!r}; it offers {shown}")
+            self.typed.add(key)
             w.setCurrentIndex(index)
         elif self.asks[key].kind == "multiline":
             w.setPlainText(str(value))
@@ -228,6 +233,15 @@ class QuickForm(QDialog):
         if self.layout() is not None:
             self.layout().activate()
         tab_in_order(self)
+
+
+def with_stored(choices: list, value, shown: str | None = None) -> list:
+    """A dropdown's choices with the value stored offered too when they lack it, so OK
+    on an untouched form never swaps it for the first choice (PANEL-25)."""
+    if value is None or any(v == value for _, v in choices):
+        return list(choices)
+    label = shown or (f"{value:g}" if isinstance(value, float) else str(value))
+    return [*choices, (label, value)]
 
 
 def ask_form(window, title: str, asks: list[Ask], intro: str = "", check=None) -> dict | None:

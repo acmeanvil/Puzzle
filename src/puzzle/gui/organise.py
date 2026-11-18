@@ -237,9 +237,11 @@ def add_to_menu(window, menu, node) -> None:
     keys = selected_keys(window, section) or [member_key(node)]
     here = folder_of(item)
     sub = menu.addMenu("Move to group")
-    inside = _inside(window, keys)  # a group never goes into itself or one it holds
+    # a group never goes into itself or one it holds (a name of its own: the lambda of
+    # New group inside… above reads `inside` when clicked)
+    holding = _inside(window, keys)
     for g in fitting(window, section, here):
-        if str(g.id) in keys or str(g.id) in inside:
+        if str(g.id) in keys or str(g.id) in holding:
             continue
         action = sub.addAction(g.name)
         action.triggered.connect(lambda _=False, gid=str(g.id): move(window, keys, gid, section))

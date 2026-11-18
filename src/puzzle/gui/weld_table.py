@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.choices import run_label
 from puzzle.gui.theme import role
 
 HEADERS = ["Weld", "Length", "Total force", "Largest line force", "J2 (LRFD)", "J2 (ASD)",
@@ -97,8 +98,7 @@ class WeldTable(QWidget):
             except Exception:
                 continue
             if "weld_line_force" in names:
-                when = r.recorded_at.strftime("%Y-%m-%d %H:%M")
-                self.run.addItem(f"{r.study_name} ({r.solver}, {when})", r.run_id)
+                self.run.addItem(run_label(r), r.run_id)
         found = self.run.findData(chosen)
         self.run.setCurrentIndex(found if found >= 0 else 0)
         self.run.blockSignals(False)
@@ -114,8 +114,8 @@ class WeldTable(QWidget):
             self.note.setText("Run a study with light welds to see their forces here.")
         else:
             store, project = self.window._store(), self.window.session.project
-            record = next(r for r in store.runs() if r.run_id == run_id)
-            try:
+            try:  # a run deleted since it was listed is said, never a raise (PANEL-10)
+                record = store.get_run(run_id)
                 study = next(o for o in project.of_type(Study) if str(o.id) == record.study_id)
                 comp = project.get(study.component, Component)
                 out = results(project, comp, store.read_mesh(record.mesh_id),

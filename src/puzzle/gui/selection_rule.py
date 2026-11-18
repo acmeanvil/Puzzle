@@ -37,14 +37,20 @@ def rule_of(values: dict) -> dict:
     _, per_m2 = area_unit()
     how = values.get("rule")
 
+    from puzzle.model.units import parse_number
+
+    what = {"low": "the low corner", "high": "the high corner", "point": "the point",
+            "direction": "the direction", "distance": "the distance", "within": "the angle",
+            "min_area": "the smallest area", "max_area": "the largest area"}  # fmt: skip
+
     def point(key: str, scale: float = 1.0) -> list[float]:
         parts = [p for p in str(values.get(key, "")).replace(";", ",").split(",") if p.strip()]
         if len(parts) != 3:
-            raise ValueError("a point or direction is three numbers: x, y, z")
-        return [float(p) / scale for p in parts]
+            raise ValueError(f"{what.get(key, key)} is three numbers: x, y, z")
+        return [parse_number(p, what.get(key, key)) / scale for p in parts]
 
-    def number(key: str, scale: float = 1.0) -> float:
-        return float(str(values.get(key, "")).strip()) / scale
+    def number(key: str, scale: float = 1.0) -> float:  # in words (PANEL-17)
+        return parse_number(values.get(key, ""), what.get(key, key)) / scale
 
     if how == "box":
         low, high = point("low", per_m), point("high", per_m)
@@ -60,7 +66,10 @@ def rule_of(values: dict) -> dict:
         direction = point("direction")
         if not any(direction):
             raise ValueError("the direction is not zero")
-        return {"normal": {"direction": direction, "within": number("within")}}
+        within = number("within")
+        if not 0 <= within <= 180:
+            raise ValueError("the angle is between 0 and 180 degrees")
+        return {"normal": {"direction": direction, "within": within}}
     if how == "area":
         out = {}
         if str(values.get("min_area", "")).strip():
@@ -69,6 +78,10 @@ def rule_of(values: dict) -> dict:
             out["max_area"] = number("max_area", per_m2)
         if not out:
             raise ValueError("give a smallest area, a largest, or both")
+        if any(v < 0 for v in out.values()):
+            raise ValueError("an area is zero or more")
+        if out.get("min_area", 0.0) > out.get("max_area", float("inf")):
+            raise ValueError("the smallest area is more than the largest")
         return out
     if how in SETS:
         names = list(dict.fromkeys(n for n in (values.get("first"), values.get("second"),

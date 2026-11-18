@@ -141,10 +141,15 @@ class AddFastener(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+        from puzzle.gui.theme import role
+
+        self.error = role(QLabel(""), "error")  # checked before it closes (PANEL-29)
+        self.error.setWordWrap(True)
+        layout.addWidget(self.error)
         layout.addWidget(buttons)
         self._typed()
         self.form_rows = form
@@ -165,38 +170,50 @@ class AddFastener(QDialog):
         self.diameter.setPlaceholderText("from the bolt type" if typed else "")
         self.pretension.setPlaceholderText("from the bolt type" if typed else "none")
 
+    def _accept(self) -> None:
+        try:
+            self.value()
+        except ValueError as exc:
+            text = str(exc)
+            self.error.setText(text[:1].upper() + text[1:])
+            return
+        self.accept()
+
     def value(self) -> dict:
-        from puzzle.model.units import plain
+        from puzzle.model.units import parse_quantity
         from puzzle.settings import current
+
+        def length(line, what):
+            try:
+                v, unit = parse_quantity(line.text(), current().display_units()["length"],
+                                         "length")  # fmt: skip
+            except ValueError as exc:
+                raise ValueError(f"{what}: {exc}") from None
+            return {"value": v, "unit": unit}
+
+        def force(line):
+            try:
+                v, unit = parse_quantity(line.text(), self.force_unit, "force")
+            except ValueError as exc:
+                raise ValueError(f"pretension: {exc}") from None
+            return {"value": v, "unit": unit}
 
         out = {
             "name": self.name.text().strip() or "Bolt",
             "source": self.source.currentData(),
             "target": self.target.currentData(),
             "type": self.btype.currentData(),
-            "diameter": (
-                {
-                    "value": float(self.diameter.text()),
-                    "unit": plain(current().display_units()["length"]),
-                }
-                if self.diameter.text().strip()
-                else None
-            ),
+            "diameter": length(self.diameter, "diameter") if self.diameter.text().strip() else None,
             "material": self.material.currentData(),
             "ends": self.ends.currentData(),
             # Applied in the first static step, then locked (ADR 0027).
-            "pretension": (
-                {"value": float(self.pretension.text()), "unit": plain(self.force_unit)}
-                if self.pretension.text().strip()
-                else None
-            ),
+            "pretension": force(self.pretension) if self.pretension.text().strip() else None,
         }
         if out["target"] == GROUND:  # a bolt to ground (ADR 0050)
             out["target"] = None
             out["ground"] = True
             if self.ground_length.text().strip():
-                unit = plain(current().display_units()["length"])
-                out["ground_length"] = {"value": float(self.ground_length.text()), "unit": unit}
+                out["ground_length"] = length(self.ground_length, "anchor length")
         if out["type"] is None and (out["diameter"] is None or out["material"] is None):
             raise ValueError("without a bolt type, give the diameter and the material")
         return {k: v for k, v in out.items() if v is not None}
@@ -284,8 +301,8 @@ def add_fastener(window, comp):
         return None
     try:
         value = dialog.value()
-    except ValueError as exc:
-        text = str(exc) if "bolt type" in str(exc) else "Type a number for the diameter"
+    except ValueError as exc:  # the field that was wrong, by name (PANEL-29)
+        text = str(exc)
         window.statusBar().showMessage(text[:1].upper() + text[1:], 8000)
         return None
     first, value["material"] = material_commands(value.get("material"))

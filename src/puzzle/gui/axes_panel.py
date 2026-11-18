@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtWidgets import QComboBox, QLineEdit
 
-from puzzle.gui.construction import PointRow, _Panel, _point, bounds
+from puzzle.gui.construction import PointRow, _Panel, _point, bounds, read_kept
 from puzzle.model.schema import CoordinateSystem
 
 TYPES = [("Cartesian (x, y, z)", "cartesian"), ("Cylindrical (r, θ, z)", "cylindrical"),
@@ -123,20 +123,20 @@ class AxesPanel(_Panel):
 
     def fill(self, cs: CoordinateSystem) -> None:
         """The panel as `cs` was made: its type, how it is placed and every value (D1)."""
-        from puzzle.gui.construction import _shown
+        from puzzle.gui.construction import show_kept
 
         how = ("entity" if cs.entity is not None else "points" if cs.points is not None
                else "angles" if cs.angles is not None else "directions")  # fmt: skip
         self.how.setCurrentIndex(self.how.findData(how))
-        self.origin.text.setText(_shown(cs.origin, self.per_metre))
-        self.first.setText(", ".join(f"{v:.6g}" for v in cs.x_axis))
-        self.second.setText(", ".join(f"{v:.6g}" for v in cs.xy_direction))
-        self.axis.setText(", ".join(f"{v:.6g}" for v in cs.axis))
-        if cs.angles is not None:
-            self.angles.setText(", ".join(f"{v:.6g}" for v in cs.angles))
+        # Every value kept whole while its text is as shown: Apply never shifts one (PANEL-27)
+        self.origin.show(cs.origin)
+        for line, values in ((self.first, cs.x_axis), (self.second, cs.xy_direction),
+                             (self.axis, cs.axis), (self.angles, cs.angles)):  # fmt: skip
+            if values is not None:
+                show_kept(line, ", ".join(f"{v:.6g}" for v in values), tuple(values))
         if cs.points is not None:
             for row, xyz in zip((self.origin, self.on_x, self.on_xy), cs.points, strict=True):
-                row.text.setText(_shown(xyz, self.per_metre))
+                row.show(xyz)
         if cs.entity is not None:
             for i in range(self.source.count()):
                 geometry, entity, name = self.source.itemData(i)
@@ -147,7 +147,7 @@ class AxesPanel(_Panel):
                 ):
                     self.source.setCurrentIndex(i)
                     break
-            self.along.setText(f"{cs.along:.6g}")
+            show_kept(self.along, f"{cs.along:.6g}", cs.along)
         if cs.relative_to is not None:
             self.relative.setCurrentIndex(max(0, self.relative.findData(str(cs.relative_to))))
         if cs.part is not None:  # Qt hands a stored tuple back as a list
@@ -221,19 +221,20 @@ class AxesPanel(_Panel):
             if not self.attached.currentData():
                 out["geometry"] = geometry
             if entity == "edge":
-                out["along"] = min(max(float(self.along.text() or 0.5), 0.0), 1.0)
+                along = read_kept(self.along, lambda t: float(t or 0.5))
+                out["along"] = min(max(along, 0.0), 1.0)
             return out
         if how == "points":
             out["points"] = [list(p) for p in self.origin_points()]
             return out
         out["origin"] = list(self.origin.value())
         if how == "angles":
-            out["angles"] = list(_vector(self.angles.text()))
+            out["angles"] = list(read_kept(self.angles, _vector))
         elif kind == "cartesian":
-            out["x_axis"] = list(_vector(self.first.text()) or (1, 0, 0))
-            out["xy_direction"] = list(_vector(self.second.text()) or (0, 1, 0))
+            out["x_axis"] = list(read_kept(self.first, _vector) or (1, 0, 0))
+            out["xy_direction"] = list(read_kept(self.second, _vector) or (0, 1, 0))
         else:
-            out["axis"] = list(_vector(self.axis.text()) or (0, 0, 1))
+            out["axis"] = list(read_kept(self.axis, _vector) or (0, 0, 1))
         return out
 
     def resolved(self) -> CoordinateSystem:

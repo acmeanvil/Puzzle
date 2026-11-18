@@ -129,8 +129,9 @@ class ResultsTab(QWidget):
             except Exception:
                 continue
             if "fastener" in names or ("stress" in names and _modelled(session.project, r)):
-                when = r.recorded_at.strftime("%Y-%m-%d %H:%M")
-                self.run.addItem(f"{r.study_name} ({r.solver}, {when})", r.run_id)
+                from puzzle.gui.choices import run_label
+
+                self.run.addItem(run_label(r), r.run_id)
         found = self.run.findData(chosen)
         self.run.setCurrentIndex(found if found >= 0 else 0)
         self.run.blockSignals(False)
@@ -140,8 +141,11 @@ class ResultsTab(QWidget):
         run_id = self.run.currentData()
         self.step.blockSignals(True)
         self.step.clear()
-        if run_id is not None:
-            results = self.window._store().read_results(run_id)
+        try:  # a run deleted since it was listed: no steps (PANEL-10's kind)
+            results = self.window._store().read_results(run_id) if run_id is not None else None
+        except Exception:  # noqa: BLE001
+            results = None
+        if results is not None:
             steps = [s for s in results.steps if "fastener" in s.fields] or [
                 s for s in results.steps if "stress" in s.fields
             ]  # only modelled bolts

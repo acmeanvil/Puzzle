@@ -609,6 +609,68 @@ failed on the old code and passes now.
   corner simplices; a coplanar morph (any 2D model) is refused with a reason.
 - Not re-read: AISC 360 H3.1's text for the HSS torsion test.
 
+**Package 10 built (2026-11-17):** GUI correctness. `tests/test_gui_correctness.py`
+has a test per finding (54), and the reviewer's menu and tree fuzz is kept as
+`tests/test_gui_fuzz.py` (9: both examples; no project, every dialog cancelled, every
+dialog accepted by its real OK and then undone; every tree right-click action), failing
+on any exception or logged panel error.
+
+- One quantity entry, `units.parse_quantity(text, unit shown, kind)`: a bare number is in
+  the unit shown, `5mm` and one decimal comma are read, an unknown unit or one of another
+  dimension is refused in words; `parse_number` for plain numbers. Properties, live
+  forms, member design, threads, fasteners, sweeps, selection rules, the VDI 2230 form
+  and the field wizard read through them (GUI-10, PANEL-4, 5, 9, 11, 12, 17, 21, 29, 34).
+  A value refused in Properties is said in the status bar (`PropertiesPanel.refused`).
+- An untouched field gives back its stored value, never the six digits it showed: step
+  forms, the material builder (values converted from the stored unit on load; one
+  hardening curve edited in place), sweeps, the coordinate-system and construction Edit
+  panels, member design, the thread form (GUI-29, PANEL-3, 6, 7, 8, 9, 22, 25, 27).
+- `report()` says an error in words (`gui/errors.plain`: the first reason of
+  `details["errors"]`, no code in the status bar; the log keeps the code); each panel in
+  `refresh` is on its own (`_aside`), so one that fails is logged and the rest follow
+  (GUI-5, GUI-24).
+- Delete takes the tree's selection only with the Model tab current and no other list,
+  table or canvas focused, and says what Undo brings back (not results); Undo and Delete
+  belong to an open sketch (GUI-1, GUI-26).
+- Another project opening lets go of the tool, the sketch, a point being picked, the run
+  queue and the legend's ranges (`_leave_project`); a run that ends after its project was
+  left is logged and not shown (GUI-2, 9, 14, 18, 27). Toolbar actions that need a
+  project are greyed out without one (GUI-6: three actions, not the 206 first counted).
+- Geometry tools: a tool holds its step by name and closes, with a message, when the step
+  or part goes; an empty dropdown and a step that can't be made are said in the form; a
+  tool applied to a file part makes its history (the import step and the new one) as one
+  command; a pending step previews only in the Geometry tab, and a preview that failed
+  is not retried until its key changes; Deform's corners are typed as points (GUI-3, 4,
+  5, 9, 28).
+- The view: a click while picking waits out the double-click interval, so a double-click
+  no longer replaces the picks first (GUI-11); a pick neither refits nor rebuilds with
+  parts hidden, the filtered mesh held by identity (GUI-12, 17); a probe on a mirrored
+  or repeated copy reads the place it was dropped on, vectors and tensors turned
+  (GUI-13); orthographic zoom and pan by the parallel scale (GUI-15); edges switched off
+  redraw (GUI-16); Esc cancels a point pick (GUI-18).
+- The tree keeps its selection across relabels; result tools list again (two functions
+  had both been imported as `title`) (GUI-23, 25). The watcher reloads only for another
+  client's write (`_history_seen`), which is also package 14's GUI-7; an unreadable file
+  on reload is said, the project kept, and tried once more (GUI-7, 8).
+- Panels: welds and members refresh with the window and survive a deleted run; runs are
+  named by solver and local time (`choices.run_label`); the table viewer sorts the whole
+  frame by value, the bolt table by number; a stored value a dropdown lacks is offered
+  "as it is" (symmetry, convergence, sweeps); the log window appends, keeping the
+  reader's place; the material builder asks before dropping edits; the autonomy sign-off
+  comes before anything is saved; a derived result's ParaView folder has no colon; a
+  form reads a run once (PANEL-2, 10, 13 to 16, 18, 20, 23 to 25, 28, 31 to 33).
+- GUI-30: Custom PDE asks its unknown and weak form in one form. The combination,
+  equation and fatigue dialogs were not bugs: their OK is disabled with a reason, and the
+  reviewer's fuzz had bypassed OK.
+- Found on the way: the tree's "New group inside…" read a variable package 2 reassigned
+  later (it raised); the convergence panel raised when its study had gone.
+- Left: PANEL-19 (kN, MPa, cm⁴ and N·m fixed in six panels, labelled, not following
+  Settings > Units), PANEL-26 (fatigue evaluated on the GUI thread: package 14),
+  optimisation plots in SI (labelled). GUI-11 and GUI-16 need a real view and were
+  changed from reading the code: for the second review on a real screen. Also for it: a
+  background task ending after its window closed, and step profiles typed in mm
+  whatever unit is shown.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

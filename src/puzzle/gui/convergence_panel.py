@@ -27,7 +27,7 @@ RATIOS = [("1.3 (sizes ÷ 1.3)", 1.3), ("1.5 (sizes ÷ 1.5)", 1.5), ("2 (sizes h
 def check(window, study_id: str):
     """Ask the check's settings, keep them on the study, then run it."""
     from puzzle.commands.model import Edit, EditOp
-    from puzzle.gui.quick_form import Ask
+    from puzzle.gui.quick_form import Ask, with_stored
     from puzzle.model.schema import Convergence
 
     study = window.session.project.objects.get(UUID(study_id))
@@ -43,9 +43,11 @@ def check(window, study_id: str):
         return None if 0 < t < 100 else "the target is between 0 and 100 %"
 
     got = window.ask_form("Check mesh convergence", [
-        Ask("levels", "Meshes", choices=LEVELS, default=c.levels,
+        Ask("levels", "Meshes", choices=with_stored(LEVELS, c.levels, f"{c.levels} meshes"),
+            default=c.levels,
             help="Three or more judge the convergence (Roache's grid convergence index)"),
-        Ask("ratio", "Each finer by", choices=RATIOS, default=c.ratio,
+        Ask("ratio", "Each finer by", choices=with_stored(RATIOS, c.ratio, f"{c.ratio:g}"),
+            default=c.ratio,
             help="Every size of the mesh recipe divided by this from one mesh to the next"),
         Ask("target", "Converged within (%)", kind="text", default=f"{c.target * 100:g}",
             help="The grid convergence index that counts as converged"),
@@ -237,7 +239,7 @@ def adapt_form(window, study_id: str):
     """Adaptive refinement (ADR 0066 phase 3) in one form; the settings kept on the
     study (one Edit), then the passes run in the background."""
     from puzzle.commands.model import Edit, EditOp
-    from puzzle.gui.quick_form import Ask
+    from puzzle.gui.quick_form import Ask, with_stored
     from puzzle.model.schema import Adapt
 
     study = window.session.project.objects.get(UUID(study_id))
@@ -253,7 +255,8 @@ def adapt_form(window, study_id: str):
         Ask("method", "Elements", choices=METHODS, default=a.method,
             help="Anisotropic elements follow thin layers (heat, flow, thin parts); MMG "
             "remeshes tetrahedra only"),
-        Ask("passes", "Budget", choices=PASSES, default=a.passes),
+        Ask("passes", "Budget", choices=with_stored(PASSES, a.passes, f"Up to {a.passes} passes"),
+            default=a.passes),
         Ask("keep", "Earlier passes", choices=KEEP, default=a.keep_passes),
     ], check=lambda v: None if _percent(v.get("target")) else "the target is a "
        "percentage between 0 and 100")  # fmt: skip
@@ -372,7 +375,12 @@ class ConvergencePanel(QWidget):
         if self.mode == "adapt":
             return self._show_adapt(study)
         name = self.check_name or study.name
-        _, c = conv.settings(s.project, name)
+        try:  # the check shown may have gone (undone, deleted): said, never raised (GUI-24)
+            _, c = conv.settings(s.project, name)
+        except PuzzleError:
+            self.title.setText("No convergence check shown")
+            self.table.setRowCount(0)
+            return
         self.title.setText(f"{name}: mesh convergence" if self.check_name
                            else f"{study.name}: mesh convergence")  # fmt: skip
         try:
@@ -399,16 +407,20 @@ class ConvergencePanel(QWidget):
             for col, text in enumerate(cells):
                 self.table.setItem(r, col, QTableWidgetItem(text))
         self.table.resizeColumnsToContents()
-        series = []
-        for n in names:
-            pts = [(float(lv.elements), lv.values[n]) for lv in self.levels
+        series, units = [], []
+        for n in names:  # in the units the table shows (PANEL-30)
+            kind = next((lv.kinds.get(n) for lv in self.levels if lv.kinds.get(n)), None)
+            factor, unit = _display_scale(kind)
+            units.append(unit)
+            pts = [(float(lv.elements), factor(lv.values[n])) for lv in self.levels
                    if lv.run and lv.values.get(n) is not None]  # fmt: skip
             series.append((n, pts))
             v = next((v for v in self.verdicts if v.quantity == n), None)
             if v is not None and v.extrapolated is not None and pts:
-                series.append((f"{n}: extrapolated", [(pts[0][0], v.extrapolated),
-                                                      (pts[-1][0], v.extrapolated)]))  # fmt: skip
-        self.plot.y_label = names[0] if len(names) == 1 else "Value"
+                e = factor(v.extrapolated)
+                series.append((f"{n}: extrapolated", [(pts[0][0], e), (pts[-1][0], e)]))
+        tail = f" ({units[0]})" if units and units[0] and len(set(units)) == 1 else ""
+        self.plot.y_label = (names[0] if len(names) == 1 else "Value") + tail
         self.plot.set_series(series)
         self.run_button.setEnabled(any(not lv.run for lv in self.levels))
         lines = [f"{v.quantity}: {v.words}" for v in self.verdicts]
@@ -458,6 +470,18 @@ class ConvergencePanel(QWidget):
                                          if p.run and p.error is not None])])  # fmt: skip
         self.run_button.setEnabled(not ended.startswith("converged"))
         self.summary.setText(ended[0].upper() + ended[1:] + ".")
+
+
+def _display_scale(kind):
+    """A function taking an SI value to the display unit of `kind`, and that unit."""
+    from puzzle.model.units import DIMENSIONS, convert, pretty
+    from puzzle.settings import current
+
+    if kind is None or kind not in DIMENSIONS:
+        return (lambda v: v), ""
+    si = DIMENSIONS[kind][1]
+    unit = current().display_units().get(kind, si)
+    return (lambda v: convert(v, si, unit)), pretty(unit)
 
 
 def _number(value, kind) -> str:

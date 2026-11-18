@@ -77,6 +77,17 @@ def _number(text: str) -> float:
     return float(text.strip().replace(",", ""))
 
 
+KEPT = 0x0100 + 11  # Qt.UserRole + 11: a table cell's (text shown, value stored)
+
+
+def _cell(item, text: str) -> float:
+    """A table cell's number: the value stored when its text is as shown (PANEL-8)."""
+    kept = item.data(KEPT) if item is not None else None
+    if kept and kept[0] == item.text() and isinstance(kept[1], (int, float)):
+        return float(kept[1])
+    return _number(text)
+
+
 class Curve(QWidget):
     """A small plot of one or more curves (x, y), with the axes' ranges and a legend,
     for checking a curve at a glance."""
@@ -236,9 +247,9 @@ class TableEditor(QDialog):
         r = self.grid.rowCount()
         self.grid.insertRow(r)
         for c, v in enumerate((a, b)):
-            self.grid.setItem(
-                r, c, QTableWidgetItem(f"{v:.6g}" if isinstance(v, float) else str(v))
-            )
+            item = QTableWidgetItem(f"{v:.6g}" if isinstance(v, float) else str(v))
+            item.setData(KEPT, (item.text(), v))  # unedited cells give the value back whole
+            self.grid.setItem(r, c, item)
 
     def rows(self) -> list[tuple[float, float]]:
         out = []
@@ -247,7 +258,7 @@ class TableEditor(QDialog):
             texts = [c.text().strip() if c else "" for c in cells]
             if not any(texts):
                 continue
-            out.append((_number(texts[0]), _number(texts[1])))
+            out.append(tuple(_cell(c, t) for c, t in zip(cells, texts, strict=True)))
         return out
 
     def _changed(self, *_):
@@ -816,6 +827,10 @@ class MaterialEditor(QWidget):
             text = line.text().strip()
             if key == "source" or not text or key.startswith("langer") != (model == "langer"):
                 continue
+            kept = getattr(self, "kept", {}).get(("strain_life", key))
+            if kept is not None and kept[0] == line.text():
+                data[key] = kept[1]  # untouched: as it was (PANEL-8)
+                continue
             try:
                 v = _number(text)
             except ValueError:
@@ -868,6 +883,9 @@ class MaterialEditor(QWidget):
         self.name.setText(material.name)
         self.description.setText(material.description)
         self.family.setText(family or "(a family of its own)")
+        from puzzle.model.units import convert
+
+        self.kept = {}  # field -> (text shown, value stored): unedited, kept (PANEL-8)
         for key, line in self.values.items():
             p = BY_KEY[key]
             unit = _display_unit(p.kind, p.unit)
@@ -875,9 +893,10 @@ class MaterialEditor(QWidget):
             q = material.properties.get(key)
             if q is None:
                 line.setText("")
-            else:
-                v, _ = _shown(q.value, q.unit) if p.kind else (q.value, q.unit)
+            else:  # in the unit labelled, whatever it was stored in (PANEL-3)
+                v = convert(q.value, q.unit, unit)
                 line.setText(f"{v:.6g}")
+                self.kept[("property", key)] = (line.text(), q)
         self.tables = {
             k: {
                 "unit": t.unit,
@@ -899,6 +918,8 @@ class MaterialEditor(QWidget):
             self.model_on[model].setChecked(data is not None)
             for n, line in fields.items():
                 line.setText(f"{_to_display(n, getattr(data, n)):.6g}" if data is not None else "")
+                if data is not None:
+                    self.kept[(model, n)] = (line.text(), getattr(data, n))
         if m.hyperelasticity is not None:
             self.hyper_kind.setCurrentIndex(self.hyper_kind.findData(m.hyperelasticity.model))
         self._curve_label()
@@ -918,6 +939,8 @@ class MaterialEditor(QWidget):
             if key == "fatigue_strength" and value is not None:
                 value = _shown(value, "Pa")[0]
             line.setText("" if value is None else (value if key == "source" else f"{value:.6g}"))
+            if value is not None and key != "source":
+                self.kept[("strain_life", key)] = (line.text(), getattr(sl, key))
             line.blockSignals(False)
         self._strain_changed()
         self.sources.setPlainText("\n".join(material.sources))
@@ -937,11 +960,15 @@ class MaterialEditor(QWidget):
         from puzzle.model.units import convert
 
         properties = {}
+        kept = getattr(self, "kept", {})
         for key, line in self.values.items():
             text = line.text().strip()
             if not text:
                 continue
             p = BY_KEY[key]
+            if kept.get(("property", key), ("",))[0] == line.text():
+                properties[key] = kept[("property", key)][1]  # untouched: as it was
+                continue
             try:
                 value = _number(text)
             except ValueError:
@@ -972,6 +999,9 @@ class MaterialEditor(QWidget):
                     continue
                 if not text and model == "failure" and n != "strain":
                     continue  # D2-D4 and ε̇0 left empty: their defaults
+                if kept.get((model, n), ("",))[0] == line.text() and text:
+                    data[n] = kept[(model, n)][1]  # untouched: as it was (PANEL-8)
+                    continue
                 try:
                     data[n] = _to_si(n, _number(text))
                 except ValueError:
@@ -1035,18 +1065,47 @@ class MaterialEditor(QWidget):
         from puzzle.model.units import convert
 
         unit = _display_unit("pressure", "Pa")
-        current = self.curves[0]["points"] if self.curves else []
+        at = self._curve_to_edit()
+        if at is None:
+            return
+        current = self.curves[at]["points"] if self.curves else []
         rows = [(e, convert(s, "Pa", unit)) for e, s in current]
+        temperature = self.curves[at].get("temperature") if self.curves else None
+        title = "Hardening curve" + (f" at {temperature - 273.15:g} °C"
+                                     if temperature is not None else "")  # fmt: skip
         rows = self.ask_table(
-            "Hardening curve", ("Equivalent plastic strain", f"True stress ({_pretty(unit)})"), rows
+            title, ("Equivalent plastic strain", f"True stress ({_pretty(unit)})"), rows
         )
         if rows is None:
             return
         points = [(e, convert(s, unit, "Pa")) for e, s in rows]
-        self.curves = [{"temperature": None, "points": points}] if points else []
-        self.model_on["plasticity"].setChecked(bool(points))
+        shown = [(e, convert(s, "Pa", unit)) for e, s in current]
+        if [tuple(r) for r in rows] == [tuple(r) for r in shown]:
+            points = list(current)  # unedited: as it was
+        # The one curve edited, its temperature and the others kept (PANEL-7).
+        if not self.curves:
+            self.curves = [{"temperature": None, "points": points}] if points else []
+        elif points:
+            self.curves[at] = {**self.curves[at], "points": points}
+        else:
+            del self.curves[at]
+        self.model_on["plasticity"].setChecked(bool(self.curves))
         self._curve_label()
         self.on_change()
+
+    def _curve_to_edit(self) -> int | None:
+        """Which hardening curve to edit: the only one, or the temperature chosen."""
+        if len(self.curves) <= 1:
+            return 0
+        window = self.window()
+        choices = [(f"{c['temperature'] - 273.15:g} °C" if c.get("temperature") is not None
+                    else "Any temperature", str(i)) for i, c in enumerate(self.curves)]  # fmt: skip
+        from puzzle.gui.quick_form import Ask, QuickForm
+
+        form = QuickForm("Hardening curve", [Ask("curve", "Temperature", choices=choices)],
+                         parent=window)  # fmt: skip
+        run = getattr(self, "run_dialog", None) or (lambda d: bool(d.exec()))
+        return int(form.values()["curve"]) if run(form) else None
 
     def build_curve(self) -> None:
         """The curve builder, started from the material's modulus and strengths."""
@@ -1189,7 +1248,7 @@ class MaterialBuilder(QDialog):
         save.clicked.connect(self.save)
         add.clicked.connect(self.add_to_project)
         add.setEnabled(window is not None and getattr(window, "session", None) is not None)
-        close.clicked.connect(self.accept)
+        close.clicked.connect(self.close_builder)
         bottom = QHBoxLayout()
         bottom.addWidget(self.status, 1)
         for b in (save, add, close):
@@ -1207,6 +1266,8 @@ class MaterialBuilder(QDialog):
         layout.addLayout(bottom)
         self.key: str | None = None  # the library key being edited (None: new)
         self.parent_key: str | None = None
+        self.dirty = False  # edits not saved anywhere yet (PANEL-33)
+        self._loading = False
         self.list()
 
     # --- the library ---------------------------------------------------------------------
@@ -1220,12 +1281,53 @@ class MaterialBuilder(QDialog):
         item = self.tree.currentItem()
         if item is None or item.data(0, KEY) is None:  # a heading (type, group, alloy)
             return
+        if item.data(0, KEY) == self.key and not self.dirty:
+            return
+        if not self.may_discard():  # back to the material being edited
+            self.tree.blockSignals(True)
+            self.list(select=self.key)
+            self.tree.blockSignals(False)
+            return
         self.key = item.data(0, KEY)
         self.parent_key = _library()[self.key].get("parent")
         family = _library()[self.parent_key]["name"] if self.parent_key else ""
-        self.editor.load(library_material(self.key), f"a variant of {family}" if family else "")
+        self._load(library_material(self.key), f"a variant of {family}" if family else "")
+
+    def _load(self, material, family: str = "") -> None:
+        self._loading = True
+        try:
+            self.editor.load(material, family)
+        finally:
+            self._loading = False
+        self.dirty = False
+
+    def may_discard(self) -> bool:
+        """Unsaved edits are dropped only when the user says so (PANEL-33)."""
+        if not self.dirty:
+            return True
+        name = self.editor.name.text().strip() or "this material"
+        return self.ask_yes("Unsaved changes",
+                            f"Discard the changes to {name}? They are in neither your "
+                            "materials nor the project.")  # fmt: skip
+
+    def ask_yes(self, title: str, text: str) -> bool:
+        """A yes or no question (tests replace this)."""
+        from PySide6.QtWidgets import QMessageBox
+
+        reply = QMessageBox.question(self, title, text)
+        return reply == QMessageBox.StandardButton.Yes
+
+    def close_builder(self) -> None:
+        if self.may_discard():
+            self.accept()
+
+    def reject(self) -> None:  # Esc and the title bar's close ask the same
+        if self.may_discard():
+            super().reject()
 
     def _edited(self) -> None:
+        if not self._loading:
+            self.dirty = True
         problem = self.editor.show_report()
         self.status.setText(problem or "")
         role(self.status, "error" if problem else "plain")
@@ -1235,9 +1337,11 @@ class MaterialBuilder(QDialog):
     def new(self) -> None:
         from puzzle.model.schema import Material
 
+        if not self.may_discard():
+            return
         self.key, self.parent_key = None, None
         self.tree.clearSelection()
-        self.editor.load(Material(name="New material"))
+        self._load(Material(name="New material"))
 
     def new_variant(self) -> None:
         from puzzle.materials import library_material
@@ -1245,11 +1349,13 @@ class MaterialBuilder(QDialog):
         if self.key is None:
             self.status.setText("Choose the material to make a variant of")
             return
+        if not self.may_discard():
+            return
         base = library_material(self.key)
         base.name = f"{base.name} (variant)"
         family = self.parent_key or self.key
         self.key, self.parent_key = None, family
-        self.editor.load(base, f"a variant of {library_material(family).name}")
+        self._load(base, f"a variant of {library_material(family).name}")
 
     def save(self) -> str | None:
         """Into your materials: a new key from the name, or the key being edited (a
@@ -1272,8 +1378,11 @@ class MaterialBuilder(QDialog):
             self.status.setText(exc.message)
             return None
         self.key = key
+        self.dirty = False
         self.status.setText(f"Saved '{material.name}' to your materials")
+        self.tree.blockSignals(True)
         self.list(select=key)
+        self.tree.blockSignals(False)
         return key
 
     def _free_key(self, base: str) -> str:
@@ -1321,7 +1430,7 @@ class MaterialBuilder(QDialog):
             self.status.setText(exc.message)
             return []
         self.key = self.parent_key = None
-        self.editor.load(Material(name="New material"))
+        self._load(Material(name="New material"))
         self.status.setText(f"Removed {len(done)} from the library (Undo brings them back)")
         self.list()
         return done
@@ -1358,6 +1467,7 @@ class MaterialBuilder(QDialog):
             return
         data = material.model_dump(mode="json", exclude={"id"})
         if self.window.submit(Create(kind="material", data=data)) is not None:
+            self.dirty = False
             self.status.setText(f"Added '{material.name}' to the project")
 
 

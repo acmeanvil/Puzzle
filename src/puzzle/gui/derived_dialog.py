@@ -185,9 +185,20 @@ class CombinationDialog(QDialog):
         studies, points, steps = QComboBox(), QComboBox(), QComboBox()
         for s in self.runs.studies:
             studies.addItem(s.name, str(s.id))
+        if study is not None and studies.findData(study) < 0:
+            # A case's study with no completed run stays as it is, never moved onto the
+            # first study listed (PANEL-24).
+            from uuid import UUID
+
+            try:
+                gone = self.project.objects.get(UUID(str(study)))
+            except ValueError:
+                gone = None
+            name = gone.name if gone is not None else "A study no longer there"
+            studies.addItem(f"{name} (no results yet)", str(study))
         if study is not None and studies.findData(study) >= 0:
             studies.setCurrentIndex(studies.findData(study))
-        coef = QLineEdit(f"{coefficient:g}")
+        coef = QLineEdit(repr(float(coefficient)).removesuffix(".0"))
         self.table.setCellWidget(r, 0, studies)
         self.table.setCellWidget(r, 1, points)
         self.table.setCellWidget(r, 2, steps)

@@ -412,6 +412,7 @@ class MainWindow(QMainWindow):
         self.measuring = None  # the Measure panel while it is open (ADR 0042)
         self.result: tuple[Mesh, Results] | None = None
         self.tasks: list[Task] = []  # keep running tasks alive
+        self._history_seen = None  # history.jsonl's size and time when last shown
         # A tool's pending history (geometry id, steps as dicts): previewed, not saved.
         self.pending: tuple | None = None
         self.slider_overrides: dict = {}  # a slider being dragged: operator id -> SI value
@@ -716,6 +717,8 @@ class MainWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
         self.properties.edited.connect(self._edit)
+        self.properties.refused.connect(
+            lambda why: self.statusBar().showMessage(f"Not changed: {why}", 10000))  # fmt: skip
         self.problems.itemDoubleClicked.connect(self._problem_chosen)
         self.viewport.redraw_needed.connect(
             lambda: self._redraw_result() if self.context == "results" else self.refresh_view()
@@ -729,12 +732,25 @@ class MainWindow(QMainWindow):
         self.watcher = QFileSystemWatcher(self)
         self.watcher.fileChanged.connect(lambda _: self._reload_soon())
         self._reload_timer = QTimer(self, singleShot=True, interval=300)
-        self._reload_timer.timeout.connect(self.reload)
+        self._reload_timer.timeout.connect(self._reload_if_changed)
         # CalculiX with PARDISO, built here once in the background (ADR 0068 decision 5),
         # a little after start so the window is up first.
         QTimer.singleShot(8000, self._build_solvers)
+        self._gate_project_actions()
         if root is not None:
             self.open(root)
+
+    # The toolbar's actions that act on a project: greyed out on the start page (GUI-6).
+    PROJECT_ACTIONS = ("save_as", "save_version", "undo", "mesh", "run", "material", "delete",
+                       "reload", "pick")  # fmt: skip
+
+    def _gate_project_actions(self) -> None:
+        has = self.session is not None
+        for name in self.PROJECT_ACTIONS:
+            action = self.actions_by_name[name]
+            action.setProperty("needs_project", True)  # the menus' gate (main_menu._enable)
+            busy = name in ("mesh", "run") and any(t.lock for t in self.tasks)
+            action.setEnabled(has and not busy)
 
     def _build_solvers(self) -> None:
         """Start the PARDISO build if it is due (`solver_builds.should_build`), and say
@@ -773,10 +789,12 @@ class MainWindow(QMainWindow):
 
     def open(self, root: Path) -> None:
         try:
-            self.session = Session(Path(root))
+            session = Session(Path(root))
         except PuzzleError as exc:
             QMessageBox.warning(self, "Open project", exc.message)
             return
+        self._leave_project()
+        self.session = session
         self.meshes.clear()
         self.mesh_keys.clear()
         self.contacts.initial.found.clear()
@@ -800,6 +818,7 @@ class MainWindow(QMainWindow):
         from puzzle.gui.visibility import Visibility
 
         self.visibility = Visibility.load(self.session.root)
+        self._gate_project_actions()
         self.agent.project_opened()
         self.refresh()
         # Open on the model, not an empty view: select the first component.
@@ -808,11 +827,59 @@ class MainWindow(QMainWindow):
             self.tree.select(Node("object", str(first.id)))
         self._offer_pending()
 
-    def reload(self) -> None:
-        """Re-read the project from disk: another client may have changed it."""
-        if self.session is not None:
-            self.session = Session(self.session.root)
-            self.refresh()
+    def _leave_project(self) -> None:
+        """What belongs to the project open so far, let go before another opens: a
+        tool, a sketch, a point being picked, the run queue (GUI-2, GUI-9, GUI-18,
+        GUI-27). A solve still running goes on and keeps its results in its own folder."""
+        if self.session is None:
+            return
+        if self.workbench.sketching is not None:
+            self.workbench._end_sketch()
+        self.workbench.close_tool(refresh=False)
+        self.workbench.geo_id = None
+        self.pending = None
+        self.viewport.cancel_capture()
+        if self._queue_cancel is not None:
+            self._queue_cancel.set()
+        self.run_queue, self._queue_cancel, self._queue_study = [], None, None
+        self.running.clear()
+        self.failed_studies = {}
+        self.previews.clear()
+        self.slider_overrides = {}
+        self._failed_preview = None
+        self._result_run = None
+        self.viewport.ranges.clear()  # a legend's custom ranges were this project's (GUI-14)
+
+    def reload(self, retry: bool = True) -> bool:
+        """Re-read the project from disk: another client may have changed it. A file
+        that can't be read (another writer mid-write, a sync tool) is said, the project
+        as it was kept, and tried once more shortly (GUI-8)."""
+        if self.session is None:
+            return False
+        try:
+            session = Session(self.session.root)
+        except PuzzleError as exc:
+            self.report(exc)
+            if retry:
+                QTimer.singleShot(1000, lambda: self.reload(retry=False))
+            return False
+        self.session = session
+        self.refresh()
+        return True
+
+    def _history_stamp(self):
+        try:
+            st = (self.session.root / HISTORY).stat()
+        except (OSError, AttributeError):
+            return None
+        return st.st_size, st.st_mtime_ns
+
+    def _reload_if_changed(self) -> None:
+        """The watcher's reload: only for what another client wrote, never for this
+        window's own edit, which is shown already (GUI-7)."""
+        if self.session is not None and self._history_stamp() == self._history_seen:
+            return
+        self.reload()
 
     def refresh(self) -> None:
         s = self.session
@@ -821,6 +888,7 @@ class MainWindow(QMainWindow):
         from puzzle import settings
 
         settings.use_project(s.project)  # its own units, if switched on (ADR 0030)
+        self._history_seen = self._history_stamp()  # what is shown: no reload for it (GUI-7)
         self._show_units()
         try:
             runs = self._store().runs()
@@ -841,35 +909,47 @@ class MainWindow(QMainWindow):
         self.failed_studies = still_failed(self.failed_studies, runs)
         self.states = status(s.project, runs, running, set(self.failed_studies))
         self.tree.visibility = self.visibility  # shown and hidden marks (D2)
-        self.tree.populate(s.project, runs, self._field_catalogs(runs), self.states)
+        # Each panel on its own: one that fails is logged and the rest still follow the
+        # project, Properties and the view last of all (GUI-24).
+        panel = self._aside
+        panel("the model tree", lambda: self.tree.populate(
+            s.project, runs, self._field_catalogs(runs), self.states))  # fmt: skip
+        panel("the history", lambda: self._fill_history(s))
+        panel("the problems", self.refresh_problems)
+        panel("the plots", self.plots.refresh)
+        panel("the sections", self.sections.refresh)
+        panel("the bolts", self.bolts.refresh)
+        panel("the contacts", self.contacts.refresh)
+        if self.versions_dock.isVisible():
+            panel("the versions", self.versions.refresh)
+        for dock, view, name in ((self.optimisation_dock, "optimisation", "the optimisation"),
+                                 (self.convergence_dock, "convergence", "the convergence"),
+                                 (self.jobs_dock, "jobs", "the jobs"),
+                                 (getattr(self, "welds_dock", None), "welds", "the welds"),
+                                 (getattr(self, "members_dock", None), "members",
+                                  "the members")):  # fmt: skip
+            if dock is not None and not dock.isHidden() and hasattr(self, view):
+                panel(name, getattr(self, view).refresh)
+        panel("the agent", self._refresh_agent)
+        panel("the Geometry tab", self.workbench.refresh)
+        if self.centre.currentWidget() is self.schematic:
+            panel("the schematic", self.schematic.refresh)
+        if not self.schematic_dock.isHidden():
+            panel("the schematic", self.schematic_panel.refresh)
+        self._selected()  # refreshes the Advisor too, when it is shown
+
+    def _fill_history(self, s) -> None:
         self.history.clear()
         names = {str(o.id): o.name for o in s.project.objects.values()}
         for entry in s.history(limit=200):  # newest first
             self.history.addItem(_history_line(entry, names))
-        self.refresh_problems()
-        self.plots.refresh()
-        self.sections.refresh()
-        self.bolts.refresh()
-        self.contacts.refresh()
-        if self.versions_dock.isVisible():
-            self.versions.refresh()
-        if not self.optimisation_dock.isHidden():
-            self.optimisation.refresh()
-        if not self.convergence_dock.isHidden():
-            self.convergence.refresh()
-        if not self.jobs_dock.isHidden():
-            self.jobs.refresh()
+
+    def _refresh_agent(self) -> None:
         self.agent.refresh()
         waiting = self.agent.proposals.count()
         if waiting > self._proposals_seen:  # a new proposal: open the agent, no focus
             self.docks.show("agent")
         self._proposals_seen = waiting
-        self.workbench.refresh()
-        if self.centre.currentWidget() is self.schematic:
-            self.schematic.refresh()
-        if not self.schematic_dock.isHidden():
-            self.schematic_panel.refresh()
-        self._selected()  # refreshes the Advisor too, when it is shown
 
     def _show_units(self) -> None:
         """The status bar's unit button: the system in effect, and whose it is."""
@@ -1166,7 +1246,7 @@ class MainWindow(QMainWindow):
             ("material", "Add material…", None, self._add_material_dialog),
             ("builder", "Material builder…", None, lambda: self.open_material_builder()),
             ("delete", "Delete", QKeySequence.StandardKey.Delete, self.delete_selected),
-            ("reload", "Reload from disk", QKeySequence.StandardKey.Refresh, self.reload),
+            ("reload", "Reload from disk", QKeySequence.StandardKey.Refresh, lambda: self.reload()),
             ("pick", "Pick", "P", self.toggle_picking),
             ("settings", "Settings…", QKeySequence.StandardKey.Preferences, self.open_settings),
         ):
@@ -1224,7 +1304,7 @@ class MainWindow(QMainWindow):
         dialog = self.material_builder()
         if material is not None:
             dialog.key = dialog.parent_key = None
-            dialog.editor.load(material)
+            dialog._load(material)
         dialog.exec()
 
     def material_builder(self):
@@ -1562,6 +1642,12 @@ class MainWindow(QMainWindow):
         change (ADR 0034), else the project's last command."""
         if self.viewport.picking and self.viewport.undo_pick():
             return
+        if self.session is None:
+            return
+        if self.workbench.sketching is not None:  # Ctrl+Z belongs to the sketch (GUI-26)
+            self.statusBar().showMessage(
+                "Finish or cancel the sketch first: Undo acts on the project", 8000)  # fmt: skip
+            return
         try:
             self.session.undo()
         except PuzzleError as exc:
@@ -1575,6 +1661,11 @@ class MainWindow(QMainWindow):
         from puzzle.gui.tree import ROLE as TREE_ROLE
 
         if self.session is None:
+            return
+        if self.workbench.sketching is not None:  # Delete belongs to the sketch (GUI-26)
+            self.workbench.workspace.delete_selected()
+            return
+        if not self._delete_acts_on_tree():
             return
         nodes = [i.data(0, TREE_ROLE) for i in self.tree.selectedItems()]
         node = self.tree.current()
@@ -1598,8 +1689,27 @@ class MainWindow(QMainWindow):
                 return
         for run_id in plan.runs:
             self.delete_run(run_id, confirm=False)
-        if len(plan.names) > 1:
-            self.statusBar().showMessage(f"Deleted {len(plan.names)} items", 8000)
+        undo = self.actions_by_name["undo"].shortcut().toString(
+            QKeySequence.SequenceFormat.NativeText)  # fmt: skip
+        what = plan.names[0] if len(plan.names) == 1 else f"{len(plan.names)} items"
+        back = f"{undo or 'Undo'} brings {'it' if len(plan.names) == 1 else 'them'} back"
+        if plan.runs:  # results are a cache: undo restores the model, never a run
+            back = f"{undo or 'Undo'} brings back all but the results"
+        self.statusBar().showMessage(f"Deleted {what}; {back}", 8000)
+
+    def _delete_acts_on_tree(self) -> bool:
+        """Delete takes the Model tree's selection only while the tree is shown, and not
+        when another list, table or canvas has the focus: its Delete is its own (GUI-1)."""
+        from PySide6.QtWidgets import QAbstractScrollArea, QApplication
+
+        if self.left_tabs.currentWidget() is not self.tree:
+            self.statusBar().showMessage(
+                "Delete removes what the Model tab has selected: open the Model tab", 8000
+            )
+            return False
+        focus = QApplication.focusWidget()
+        inside = focus is self.tree or (focus is not None and self.tree.isAncestorOf(focus))
+        return inside or not isinstance(focus, QAbstractScrollArea)
 
     def delete_run(self, run_id: str, confirm: bool = True) -> bool:
         """Delete a stored result set (asked first): results are a cache, so the study
@@ -1633,6 +1743,8 @@ class MainWindow(QMainWindow):
 
     def _add_material_dialog(self) -> None:
         """The library grouped by type, group and alloy, with a search (MaterialPicker)."""
+        if self.session is None:
+            return
         key = self.pick_material()
         if key:
             self.add_material(key)
@@ -1645,6 +1757,8 @@ class MainWindow(QMainWindow):
         return picker.key if picker.exec() else None
 
     def mesh_selected(self) -> Task | None:
+        if self.session is None:
+            return None
         comp = self._component_of(self.tree.current())
         if self.left_tabs.currentWidget() is self.mesh_bench:
             comp = self.mesh_bench.component_obj()
@@ -1759,6 +1873,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Stopped; {left} studies not started", 8000)
 
     def run_selected(self) -> Task | None:
+        if self.session is None:
+            return None
         node = self.tree.current()
         study = self._object(node)
         if not isinstance(study, Study):
@@ -1790,16 +1906,28 @@ class MainWindow(QMainWindow):
         self.solution.start(f"{study.name}: {solver_label(study.solver)}", cancel)
 
         sid = str(study.id)
+        root = self.session.root  # the project it ran for: another may be open by its end
 
         def work(emit, emit_event):
             return call(emit, emit_event, cancel)
 
+        def here() -> bool:
+            if self.session is not None and self.session.root == root:
+                return True
+            self.log.appendPlainText(f"{study.name} ended in {root.name}, no longer open "
+                                     "here: its results are kept there")  # fmt: skip
+            return False
+
         def done(outcome) -> None:
+            if not here():  # GUI-2: never selected in another project's store
+                return
             self._after_run(outcome, study, sid)
             if then is not None:
                 then(True)
 
         def failed(exc) -> None:
+            if not here():
+                return
             self._run_failed(exc, study, sid)
             if then is not None:
                 then(False)
@@ -2057,6 +2185,14 @@ class MainWindow(QMainWindow):
 
     def _tab_changed(self) -> None:
         current = self.left_tabs.currentWidget()
+        sketch = self.workbench.workspace if self.workbench.sketching is not None else None
+        if sketch is not None:  # the canvas only with its tab; back where it was (GUI-27)
+            if current is self.workbench:
+                self.centre.setCurrentWidget(sketch)
+                self.set_context("sketch")
+                return
+            if self.centre.currentWidget() is sketch:
+                self.centre.setCurrentIndex(0)
         on = current is self.schematic_side
         if on:
             self.schematic.refresh()
@@ -2198,12 +2334,17 @@ class MainWindow(QMainWindow):
 
     def show_sketch(self, workspace) -> None:
         """The sketch canvas in the centre (None: the 3D view again)."""
-        if workspace is None:
-            old = self.centre.currentWidget()
-            self.centre.setCurrentIndex(0)
-            if old not in (self.centre.widget(0), self.start_page, self.schematic):
-                self.centre.removeWidget(old)
-                old.deleteLater()
+        if workspace is None:  # the sketch canvases go, wherever the centre is (GUI-27)
+            from puzzle.gui.sketcher import SketchWorkspace
+
+            showing = self.centre.currentWidget()
+            for i in reversed(range(self.centre.count())):
+                old = self.centre.widget(i)
+                if isinstance(old, SketchWorkspace):
+                    self.centre.removeWidget(old)
+                    old.deleteLater()
+            if isinstance(showing, SketchWorkspace):
+                self.centre.setCurrentIndex(0)
             if self.context == "sketch":
                 self.set_context("geometry")
             return
@@ -2273,7 +2414,11 @@ class MainWindow(QMainWindow):
         from puzzle.gui.choices import solver_label
 
         store = self._store()
-        record = store.get_run(run_id)
+        try:
+            record = store.get_run(run_id)
+        except KeyError:  # deleted, or another project open since (GUI-2)
+            self.statusBar().showMessage("Those results are no longer there", 8000)
+            return
         self._run_rows = {
             "Study": record.study_name,
             "Solver": solver_label(record.solver),
@@ -3496,7 +3641,7 @@ class MainWindow(QMainWindow):
             task.ticker = None
         if not any(t.lock for t in self.tasks):
             for name in ("mesh", "run"):
-                self.actions_by_name[name].setEnabled(True)
+                self.actions_by_name[name].setEnabled(self.session is not None)
 
     def open_solution(self) -> None:
         """The messages area open on the Solution tab (Window → Solution)."""
@@ -3505,12 +3650,16 @@ class MainWindow(QMainWindow):
         self.output_tabs.setCurrentWidget(self.solution)
 
     def report(self, exc: Exception) -> None:
+        """An error in words: the reason the session gave (`details["errors"]`) in the
+        status bar, with no internal code; the log keeps the code too (GUI-5)."""
+        from puzzle.gui.errors import plain
+
         self.fold_messages(False)
         self.output_tabs.setCurrentWidget(self.log)
-        text = exc.message if isinstance(exc, PuzzleError) else f"{type(exc).__name__}: {exc}"
-        code = f"[{exc.code}] " if isinstance(exc, PuzzleError) else ""
-        self.log.appendPlainText(f"error: {code}{text}")
-        self.statusBar().showMessage(f"{code}{text.splitlines()[0] if text else ''}", 10000)
+        text = plain(exc)
+        code = f" [{exc.code}]" if isinstance(exc, PuzzleError) else ""
+        self.log.appendPlainText(f"error{code}: {text}")
+        self.statusBar().showMessage(text.splitlines()[0] if text else "", 10000)
 
     def _store(self) -> ResultStore:
         return ResultStore(self.session.root / RESULTS_DIR)
@@ -3580,6 +3729,8 @@ class MainWindow(QMainWindow):
             return cached[1].mesh
         if self._previewing == (cid, key):
             return None  # already being made
+        if getattr(self, "_failed_preview", None) == (cid, key):
+            return None  # failed for this key: not tried again until it changes (GUI-28)
         from puzzle.mesh import generate_mesh
 
         s = self.session
@@ -3588,14 +3739,20 @@ class MainWindow(QMainWindow):
             from puzzle.operators import with_values
 
             project = with_values(project, self.slider_overrides)
-        if self.pending is not None:  # a tool's step, previewed before it is applied
+        if self._pending() is not None:  # a tool's step, previewed before it is applied
+            from pydantic import ValidationError
+
             from puzzle.model.schema import HistoryStep
 
             geo_id, steps = self.pending
             geo = project.objects.get(geo_id)
             if geo is not None:
-                history = [HistoryStep(**step) for step in steps]
-                project.objects[geo_id] = geo.model_copy(update={"history": history})
+                try:  # a tool's form says why it can't be made; the part as it is here
+                    history = [HistoryStep(**step) for step in steps]
+                    update = {"history": history, "source": None} if history else {}
+                    project.objects[geo_id] = geo.model_copy(update=update)
+                except ValidationError:
+                    pass
         if comp.id not in project.objects:  # a geometry shown on its own
             _, recipe = self._standalones[str(comp.parts[0].geometry)]
             project.add(recipe)
@@ -3611,6 +3768,7 @@ class MainWindow(QMainWindow):
         def failed(_exc) -> None:  # reported by background(): the step that failed
             if self._previewing == (cid, key):  # not a preview already superseded
                 self._previewing = None
+                self._failed_preview = (cid, key)
                 self.viewport.clear()
 
         self.background(
@@ -3666,10 +3824,18 @@ class MainWindow(QMainWindow):
 
         params = sorted(parameter_values(project, self.slider_overrides).items())
         pending = None
-        if self.pending is not None and any(p.geometry == self.pending[0] for p in comp.parts):
-            pending = [str(self.pending[0]), self.pending[1]]
+        held = self._pending()
+        if held is not None and any(p.geometry == held[0] for p in comp.parts):
+            pending = [str(held[0]), held[1]]
         text = json.dumps([parts, shapes, params, pending], sort_keys=True, default=str)
         return hashlib.sha256(text.encode()).hexdigest()
+
+    def _pending(self) -> tuple | None:
+        """A tool's unapplied step, while the Geometry tab shows it: never in the Model
+        or Mesh tab's views (GUI-28)."""
+        if self.pending is None or self.left_tabs.currentWidget() is not self.workbench:
+            return None
+        return self.pending
 
     def _files_stamp(self, geo: Geometry) -> list:
         """Size and time of the files a geometry reads (its source, its import steps)."""

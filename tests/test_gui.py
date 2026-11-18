@@ -113,7 +113,8 @@ def test_a_bad_edit_is_refused_and_reported(window):
     before = len(window.session.history_entries())
     property_item(window, "global_size").setText(1, "3 apples")
     assert len(window.session.history_entries()) == before
-    assert "error:" in window.log.toPlainText()
+    # refused as it is typed, and said why (GUI-10): no command sent
+    assert "'apples' is not a unit" in window.statusBar().currentMessage()
     assert property_item(window, "global_size").text(1) == "2.5 mm"  # the panel shows the truth
 
 

@@ -198,7 +198,17 @@ class TextViewer(QDialog):
         bar = self.text.verticalScrollBar()
         at_end = bar.value() >= bar.maximum() - 2
         keep = bar.value()
-        self.text.setPlainText(self._text() or "Nothing written yet.")
+        new = self._text() or "Nothing written yet."
+        old = getattr(self, "_shown_text", None)
+        if not force and old and len(new) > len(old) and new.startswith(old):
+            # Grown at its end: only the new lines added, so the reader's cursor and
+            # selection stay where they were (PANEL-31: the whole text was reset).
+            end = QTextCursor(self.text.document())
+            end.movePosition(QTextCursor.MoveOperation.End)
+            end.insertText(new[len(old) :])
+        else:
+            self.text.setPlainText(new)
+        self._shown_text = new
         if force or at_end:
             self.text.moveCursor(QTextCursor.MoveOperation.End)
             self.text.ensureCursorVisible()

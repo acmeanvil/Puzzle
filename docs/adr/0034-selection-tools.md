@@ -67,3 +67,7 @@ Ansys adds "extend to tangent", "extend to limits" and "select all faces of the 
 
 - A separate selection window (PrePoMax): it puts the tools out of the view. A pick bar over the view keeps the user's eyes on the model.
 - Mesh-based selection (by node or element id): it doesn't survive remeshing, and Puzzle's selections are geometric by design (ADR 0004).
+
+## Amended (2026-11-17, ADR 0090 package 10)
+
+A click while picking acts after the double-click interval: the first click of a double-click used to replace the picks the double-click then toggled. A pick with parts hidden neither refits the camera nor rebuilds the filtered mesh. Not yet checked on a real view (the second review).

@@ -56,3 +56,7 @@ Tested in `tests/test_gui_workbench.py`: a part sketched, extruded and undone as
 - A separate sketch window opened from the Geometry tab: simpler, but the 3D part is hidden or crowded beside it, and it repeats the modal feel the maintainer found hard to discover.
 - Sketches inside the feature that uses them (as in G5): fewer objects, but a sketch can feed one feature only and is edited through that feature.
 - Improved dialogs with pick buttons: less work, but still modal, with no live preview.
+
+## Amended (2026-11-17, ADR 0090 package 10)
+
+A tool applied to a part read from a file makes its history, the import step and the new one, as one command (selections follow as they do for Convert to history). A tool holds the step it edits by name and closes with a message when the step or part goes (an undo, another client). A pending step previews only while the Geometry tab is current; the sketch canvas shows only with that tab, and Undo and Delete belong to the sketch while one is open. An empty dropdown and a step that can't be made are said in the tool's form.

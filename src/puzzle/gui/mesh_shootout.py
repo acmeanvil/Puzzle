@@ -25,8 +25,10 @@ def quantities(window, study_id: str | None) -> list[tuple[str, str]]:
     if not study_id:
         return list(DEFAULTS)
     try:
+        from puzzle.gui.result_tools import _run_of  # the run read once per form (PANEL-13)
+
         record = run_for(window.session.project, window._store(), UUID(study_id))
-        steps = window._store().read_results(record.run_id).steps if record else []
+        steps = _run_of(window, study_id)[1].steps if record else []
     except Exception:  # noqa: BLE001 - no run, or no store yet: the usual ones
         steps = []
     if not steps:

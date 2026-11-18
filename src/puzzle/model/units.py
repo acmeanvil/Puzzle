@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+import re
 from functools import cache
 
 import pint
@@ -193,6 +195,71 @@ def system_units(system: str, custom: dict[str, str] | None = None) -> dict[str,
     else:
         units.update(SYSTEMS.get(system, SYSTEMS["si"])[1])
     return units
+
+
+_NUMBER = re.compile(r"^\s*([-+]?(?:\d[\d.,]*|[.,]\d+)(?:[eE][-+]?\d+)?)\s*(.*?)\s*$")
+
+
+def parse_quantity(text: str, unit: str, kind: str | None = None) -> tuple[float, str]:
+    """What a person typed for a quantity, as (number, unit pint reads): "5 mm", "5mm",
+    "2,5 mm" (one decimal comma) or a bare "5", which is in `unit`, the unit shown
+    (ADR 0024). The unit must be known and of `kind` (a key of DIMENSIONS; "any" for
+    no check), or of the same dimension as `unit` when no kind is given. Raises
+    ValueError in words: every form takes quantities through this (ADR 0090 package 10)."""
+    raw = text.strip()
+    match = _NUMBER.match(raw)
+    if not raw or match is None:
+        raise ValueError(f"'{raw}': type a number, then its unit (e.g. 5 {pretty(unit)})"
+                         if raw else "type a number")  # fmt: skip
+    number, given = match.group(1), match.group(2)
+    if "," in number:  # a decimal comma, as many keypads type it; never a thousands one
+        if "." in number or number.count(",") > 1:
+            raise ValueError(f"'{raw}': write the number with one decimal point")
+        number = number.replace(",", ".")
+    try:
+        value = float(number)
+    except ValueError:
+        raise ValueError(f"'{raw}': '{number}' is not a number") from None
+    if not math.isfinite(value):
+        raise ValueError(f"'{raw}': the value must be finite")
+    given = plain(given) if given else plain(unit)
+    if not known(given):
+        raise ValueError(f"'{raw}': '{given}' is not a unit Puzzle knows")
+    expected = DIMENSIONS[kind][1] if kind in DIMENSIONS else (plain(unit) or None)
+    if kind == "any":
+        expected = None
+    if expected and not same_dimension(given, expected):
+        what = DIMENSIONS[kind][0].lower() if kind in DIMENSIONS else None
+        what = what or (DIMENSIONS[kind_of(expected)][0].lower() if kind_of(expected) else None)
+        raise ValueError(f"'{raw}': {pretty(given)} is not a "
+                         f"{what or 'unit like ' + pretty(expected)}")  # fmt: skip
+    return value, given
+
+
+def parse_number(text: str, what: str = "") -> float:
+    """A plain number as typed ("2.5", "2,5"), finite; ValueError naming `what`, never
+    Python's "could not convert string to float" (PANEL-17)."""
+    raw = str(text).strip()
+    lead = f"{what}: " if what else ""
+    if not raw:
+        raise ValueError(f"{lead}type a number")
+    number = raw.replace(",", ".") if raw.count(",") == 1 and "." not in raw else raw
+    try:
+        value = float(number)
+    except ValueError:
+        raise ValueError(f"{lead}'{raw}' is not a number") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{lead}the value must be finite")
+    return value
+
+
+@cache
+def same_dimension(a: str, b: str) -> bool:
+    """Whether two units measure the same kind of thing ("mm" and "in"; not "mm" and "kN")."""
+    try:
+        return registry().Unit(a).dimensionality == registry().Unit(b).dimensionality
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def plain(unit: str) -> str:

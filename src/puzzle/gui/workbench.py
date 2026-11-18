@@ -94,6 +94,9 @@ class ToolPanel(QWidget):
         from puzzle.gui.step_dialog import StepForm
 
         self.workbench, self.geo_id, self.kind, self.index = workbench, geo.id, kind, index
+        # The step edited, by name (unique per part): its index is found when needed,
+        # since an undo or another client can move it (GUI-9).
+        self.step_name = geo.history[index].name if index is not None else None
         before = index if index is not None else len(geo.history)
         self.form = StepForm(
             kind,
@@ -143,24 +146,65 @@ class ToolPanel(QWidget):
         if self.live:
             self.form.changed.connect(self.timer.start)
             self.preview()
+        else:  # nothing previewed yet, but what can't be made is said at once (GUI-3)
+            try:
+                self.history()
+            except ValueError as exc:
+                self.error.setText(str(exc))
 
     @property
     def window(self):
         return self.workbench.window
 
     def geometry(self) -> Geometry | None:
-        return self.window.session.project.objects.get(self.geo_id)
+        session = self.window.session
+        found = session.project.objects.get(self.geo_id) if session is not None else None
+        return found if isinstance(found, Geometry) else None
+
+    def gone(self) -> str | None:
+        """Why this tool can no longer apply (its part or step went), or None."""
+        if self.geometry() is None:
+            return "The part this tool was working on is no longer there"
+        if self.step_name is not None and self.current_index() is None:
+            return f"The step '{self.step_name}' is no longer there"
+        return None
+
+    def current_index(self) -> int | None:
+        """Where the step edited is now (None for a new step, or when it went)."""
+        geo = self.geometry()
+        if self.step_name is None or geo is None:
+            return None
+        return next((i for i, s in enumerate(geo.history) if s.name == self.step_name), None)
 
     def history(self, with_step: bool = True) -> list[dict]:
-        """The part's history with this step in it (or up to it, for picking)."""
+        """The part's history with this step in it (or up to it, for picking); a file
+        part's starts with the import it becomes (GUI-5). Raises ValueError, in words,
+        when the step can't be made from the form or its part went (GUI-3, GUI-9)."""
+        from pydantic import ValidationError
+
+        from puzzle.gui import menus
+        from puzzle.model.schema import HistoryStep
+
+        why = self.gone()
+        if why:
+            raise ValueError(why)
         geo = self.geometry()
         steps = [s.model_dump(mode="json") for s in geo.history]
-        at = self.index if self.index is not None else len(steps)
+        if geo.source is not None:
+            steps = [menus.imported_step(geo)]
+        index = self.current_index()
+        at = index if index is not None else len(steps)
         if not with_step:
             return steps[:at]
         step = {"kind": self.kind, "name": self.form.name.text().strip(), "args": self.args()}
-        if self.index is not None:
-            steps[self.index] = {**steps[self.index], **step}
+        try:
+            HistoryStep(**step)  # refused here, in words, not inside the preview
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(p) for p in first["loc"][1:2])
+            raise ValueError(f"{where}: {first['msg']}" if where else first["msg"]) from None
+        if index is not None:
+            steps[index] = {**steps[index], **step}
         else:
             steps.append(step)
         return steps
@@ -184,8 +228,13 @@ class ToolPanel(QWidget):
         take the picks."""
         w = self.window
         if self.picking is None:
+            try:
+                before = self.history(with_step=False)
+            except ValueError as exc:
+                self.error.setText(str(exc))
+                return
             self.picking = field
-            w.preview_history(self.geo_id, self.history(with_step=False))
+            w.preview_history(self.geo_id, before)
             w.viewport.set_pick_kind(field.entity)
             index = w.pick_bar.filter.findData(field.entity)
             w.pick_bar.filter.setCurrentIndex(index)
@@ -212,8 +261,13 @@ class ToolPanel(QWidget):
         except ValueError as exc:
             self.error.setText(str(exc))
             return
-        geo = self.geometry()
-        out = menus.apply_step(self.window, geo, self.kind, name, args, index=self.index)
+        why = self.gone()
+        if why:  # undone or deleted under the panel (GUI-9): said, never a raise
+            self.window.statusBar().showMessage(why, 8000)
+            self.workbench.close_tool()
+            return
+        out = menus.apply_step(self.window, self.geometry(), self.kind, name, args,
+                               index=self.current_index())  # fmt: skip
         if out is not None:
             self.workbench.close_tool()
 
@@ -379,6 +433,10 @@ class Workbench(QWidget):
             self.geo_id = None
         self.part.blockSignals(False)
         self._list_steps()
+        if self.tool is not None and self.tool.gone():  # undone or deleted under it (GUI-9)
+            why = self.tool.gone()
+            self.close_tool(refresh=False)
+            self.window.statusBar().showMessage(f"{why}: the tool was closed", 8000)
         enabled = self.geometry() is not None and self.sketching is None
         for b in self.tool_buttons.values():
             b.setEnabled(enabled)
@@ -505,7 +563,11 @@ class Workbench(QWidget):
         args, name = ({}, "")
         if index is not None:
             args, name = dict(geo.history[index].args), geo.history[index].name
-        self.tool = ToolPanel(self, geo, kind, index, args, name)
+        try:
+            self.tool = ToolPanel(self, geo, kind, index, args, name)
+        except Exception:
+            self.window.preview_history(None, None)  # never a preview left without a tool
+            raise
         self.window.show_tool(self.tool)
         return self.tool
 

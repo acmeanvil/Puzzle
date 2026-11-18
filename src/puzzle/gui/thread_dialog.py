@@ -24,7 +24,8 @@ def thread_contact(window, comp, index: int | None = None):
     """Ask a thread's form, size and flanks for a contact (asked too when `index` is
     None: the menu bar's item), then one Edit."""
     from puzzle.gui.quick_form import Ask
-    from puzzle.model.units import known, plain
+    from puzzle.model.units import parse_quantity
+    from puzzle.settings import length_unit
 
     if not comp.contacts:
         window.statusBar().showMessage(
@@ -33,23 +34,41 @@ def thread_contact(window, comp, index: int | None = None):
         return None
     names = [c.name for c in comp.contacts]
     first = comp.contacts[index] if index is not None else comp.contacts[0]
-    old = first.thread
-    hint = _suggested(window, comp, first) if old is None else None
-    size = old.size if old is not None else (hint or {}).get("size") or "M16"
+    by_name = {c.name: c for c in comp.contacts}
+    hints: dict = {}
+    unit = length_unit()[0]
+
+    def chosen(v):
+        """The contact the form is about: its fields start from its thread (PANEL-22)."""
+        return by_name.get(v.get("contact"), first)
+
+    def old_of(v):
+        return chosen(v).thread
+
+    def hint_of(v):
+        c = chosen(v)
+        if c.thread is None and c.name not in hints:
+            hints[c.name] = _suggested(window, comp, c)
+        return hints.get(c.name) if c.thread is None else None
+
+    def size_of(v):
+        old = old_of(v)
+        return old.size if old is not None else (hint_of(v) or {}).get("size") or "M16"
+
+    def keep(attr, blank, shown=lambda x: x):
+        """A field's default: the chosen contact's thread's, else `blank`."""
+        return lambda v: shown(getattr(old_of(v), attr)) if old_of(v) is not None else blank
 
     def sizes(v):
         found = ts.sizes_for(v.get("form", "iso"))
         return [(n, n) for n in found] or [("(none)", None)]
 
-    def quantity(text: str):
-        number, _, unit = text.strip().partition(" ")
-        unit = plain(unit.strip() or "mm")
-        if not known(unit):
-            raise ValueError(f"unknown unit '{unit}'")
-        return {"value": float(number), "unit": unit}
+    def quantity(text: str):  # a bare number in the unit shown, a length (PANEL-21)
+        value, given = parse_quantity(text, unit, "length")
+        return {"value": value, "unit": given}
 
-    def mm(q) -> str:
-        return f"{q.value:g} {q.unit}" if q is not None else ""
+    def mm(q) -> str:  # as stored, every digit: an untouched field writes it back as it was
+        return f"{q.value:.15g} {q.unit}" if q is not None else ""
 
     def values(v) -> dict:
         form = v["form"]
@@ -81,30 +100,33 @@ def thread_contact(window, comp, index: int | None = None):
     if index is None:
         asks.append(Ask("contact", "Contact", choices=[(n, n) for n in names]))
     asks += [
-        Ask("form", "Form", choices=ts.form_choices(), default=old.form if old else "iso"),
-        Ask("size", "Size", choices=sizes, default=size,
+        Ask("form", "Form", choices=ts.form_choices(), follow=keep("form", "iso")),
+        Ask("size", "Size", choices=sizes, follow=size_of,
             shown=lambda v: v.get("form") in ts.SIZED,
-            help=f"Suggested from the cylinders: {hint['size']}" if hint else ""),
-        Ask("major", "Major diameter", kind="text", default=mm(old.major) if old else "",
-            shown=lambda v: v.get("form") not in ts.SIZED, help="With its unit: 20 mm"),
-        Ask("pitch", "Pitch", kind="text", default=mm(old.pitch) if old else "",
-            shown=lambda v: v.get("form") not in ts.SIZED, help="With its unit: 4 mm"),
+            help="Suggested from the cylinders when they have no thread yet"),
+        Ask("major", f"Major diameter ({unit})", kind="text", follow=keep("major", "", mm),
+            shown=lambda v: v.get("form") not in ts.SIZED, help="A bare number is in "
+            f"{unit}; or with its unit: 20 mm"),
+        Ask("pitch", f"Pitch ({unit})", kind="text", follow=keep("pitch", "", mm),
+            shown=lambda v: v.get("form") not in ts.SIZED, help="A bare number is in "
+            f"{unit}; or with its unit: 4 mm"),
         Ask("angles", "Flank angles (degrees)", kind="text", default="30, 30",
             shown=lambda v: v.get("form") == "custom",
             help="The load flank's, then the other's, from the radial plane"),
-        Ask("starts", "Starts", kind="text", default=str(old.starts if old else 1)),
+        Ask("starts", "Starts", kind="text", follow=keep("starts", "1", str)),
         Ask("hand", "Hand", choices=[("Right", "right"), ("Left", "left")],
-            default=old.hand if old else "right"),
+            follow=keep("hand", "right")),
         Ask("type", "Flanks", choices=kinds,
-            default=first.type if first.type in ts.TYPES else "bonded"),
+            follow=lambda v: chosen(v).type if chosen(v).type in ts.TYPES else "bonded"),
         Ask("bearing", "Bearing flank", choices=[(t, k) for k, t in ts.BEARING_NAMES.items()],
-            default=old.bearing if old else "auto"),
+            follow=keep("bearing", "auto")),
         Ask("compliance", "Teeth's give",
             choices=[(t, k) for k, t in ts.COMPLIANCE_NAMES.items()],
-            default=old.compliance if old and isinstance(old.compliance, str) else "teeth"),
-        Ask("clearance", "Clearance", kind="text", default=mm(old.clearance) if old else "",
+            follow=lambda v: (old_of(v).compliance if old_of(v) is not None
+                              and isinstance(old_of(v).compliance, str) else "teeth")),
+        Ask("clearance", f"Clearance ({unit})", kind="text", follow=keep("clearance", "", mm),
             shown=lambda v: v.get("type") == "frictionless",
-            help="Backlash along the flanks, with its unit; empty: none"),
+            help=f"Backlash along the flanks; a bare number is in {unit}; empty: none"),
     ]  # fmt: skip
     got = window.ask_form(
         "Thread",

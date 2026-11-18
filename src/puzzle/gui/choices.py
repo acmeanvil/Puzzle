@@ -447,3 +447,9 @@ def _physics_of_feature(obj, feature) -> str | None:
 
 def solver_label(key: str) -> str:
     return SOLVERS.get(key, label(key))
+
+
+def run_label(record) -> str:
+    """A stored run as panels list it: study, solver by name, local time (PANEL-18)."""
+    when = record.recorded_at.astimezone().strftime("%Y-%m-%d %H:%M")
+    return f"{record.study_name} ({solver_label(record.solver)}, {when})"

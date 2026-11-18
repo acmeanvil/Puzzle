@@ -57,6 +57,21 @@ def _combo(pairs, value) -> QComboBox:
     return box
 
 
+def _numbers(texts, what: str, blank: float | None = None) -> list[float]:
+    """Typed numbers, or ValueError naming the field: never Python's own words (PANEL-4)."""
+    out = []
+    for t in texts:
+        t = t.strip()
+        if not t and blank is not None:
+            out.append(blank)
+            continue
+        try:
+            out.append(float(t.replace(",", ".") if t.count(",") == 1 else t))
+        except ValueError:
+            raise ValueError(f"{what}: '{t}' is not a number") from None
+    return out
+
+
 def _triple(values=(0.0, 0.0, 0.0)) -> tuple[QHBoxLayout, list[QLineEdit]]:
     row = QHBoxLayout()
     edits = []
@@ -158,8 +173,8 @@ class FilePage(QWizardPage):
         """What the field's times come from: still, every step, or files with times;
         `axis` time, or frequency (the times are then hertz)."""
         how = self.timing.currentData()
-        text = self.times.text().replace(";", ",").replace(" ", ",")
-        times = [float(t) for t in text.split(",") if t.strip()] or None
+        text = self.times.text().replace(";", " ").replace(",", " ")
+        times = _numbers(text.split(), "Times (seconds, or hertz)") or None
         axis = "frequency" if how.endswith("_frequency") else "time"
         how = how.removesuffix("_frequency")
         return {"how": how, "times": times, "files": self.extra, "axis": axis}
@@ -201,6 +216,15 @@ class FilePage(QWizardPage):
                           + (f", {len(self.found['steps'])} steps" if multi else "")
                           + (f" ({notes})" if notes else ""))  # fmt: skip
         self.completeChanged.emit()
+
+    def validatePage(self) -> bool:  # noqa: N802 - Qt's name
+        """Times read and as many as the files or steps, before going on (PANEL-4)."""
+        try:
+            self.wizard().draft_times()
+        except ValueError as exc:
+            self.note.setText(str(exc))
+            return False
+        return True
 
     def columns(self) -> list[dict]:
         out = []
@@ -254,14 +278,22 @@ class AlignPage(QWizardPage):
         self.helpers.show_target()  # the target, and the points drawn over it
 
     def placement(self) -> dict:
-        def read(edits):
-            return tuple(float(e.text() or 0) for e in edits)
+        def read(edits, what):
+            return tuple(_numbers([e.text() for e in edits], what, blank=0.0))
 
-        out = {"translation": read(self.move), "rotation": read(self.turn),
-               "about": read(self.about)}  # fmt: skip
+        out = {"translation": read(self.move, "Move by"), "rotation": read(self.turn, "Rotate"),
+               "about": read(self.about, "About the point")}  # fmt: skip
         if self.axes.currentData():
             out["axes"] = self.axes.currentData()
         return out
+
+    def validatePage(self) -> bool:  # noqa: N802 - Qt's name
+        try:
+            self.placement()
+        except ValueError as exc:
+            self.setSubTitle(str(exc))
+            return False
+        return True
 
 
 class CheckPage(QWizardPage):
@@ -313,7 +345,11 @@ class CheckPage(QWizardPage):
         from puzzle.fields import check
         from puzzle.gui.field_align_panel import with_target
 
-        f, folder = self.wizard_.draft()
+        try:
+            f, folder = self.wizard_.draft()
+        except ValueError as exc:  # said on the page, never a popup (PANEL-4)
+            self.report.setText(str(exc))
+            return
         window = self.wizard_.window
         where = self.target.currentData()
         self.report.setText("Checking…")
@@ -381,9 +417,9 @@ class FieldWizard(QWizard):
         for page in (self.file, self.align, self.verify, self.naming):
             self.addPage(page)
 
-    def draft(self):
-        """The field as it stands, reading the chosen file where it is (nothing copied)."""
-        from puzzle.model.schema import FieldColumn, FieldPlacement, FieldTime, ImportedField
+    def draft_times(self):
+        """The field's times from the first page (FieldTime list); ValueError in words."""
+        from puzzle.model.schema import FieldTime
 
         path = Path(self.file.path.text())
         found = self.file.found or {}
@@ -402,6 +438,15 @@ class FieldWizard(QWizard):
                 raise ValueError(f"the source has {len(steps)} steps; give as many times")
             times = [FieldTime(time=t, index=s["index"]) for t, s in zip(given, steps,
                      strict=True)]  # fmt: skip
+        return times, timing
+
+    def draft(self):
+        """The field as it stands, reading the chosen file where it is (nothing copied)."""
+        from puzzle.model.schema import FieldColumn, FieldPlacement, ImportedField
+
+        path = Path(self.file.path.text())
+        found = self.file.found or {}
+        times, timing = self.draft_times()
         f = ImportedField(
             name=self.naming.name.text() or path.stem,
             file=path.name,
@@ -418,6 +463,17 @@ class FieldWizard(QWizard):
             axis=timing["axis"] if times else "time",
         )
         return f, path.parent
+
+    def accept(self) -> None:
+        """Finish: closes only once the field is made; a refusal is said on the last
+        page with everything kept (PANEL-4: it raised after the wizard had closed)."""
+        try:
+            done = self.finish()
+        except ValueError as exc:
+            self.naming.setSubTitle(f"Not made: {exc}")
+            return
+        if done is not None:
+            super().accept()
 
     def finish(self):
         """The Create command's outcome (the file copied into the project first)."""
@@ -442,7 +498,6 @@ def import_field(window):
     alignment page picks points in the main view and draws the data over the model."""
     wizard = FieldWizard(window)
     wizard.setModal(False)
-    wizard.accepted.connect(wizard.finish)
     wizard.finished.connect(lambda _result: window._selected())  # the view as it was
     window._field_wizard = wizard  # kept while open
     wizard.show()

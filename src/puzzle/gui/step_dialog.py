@@ -73,6 +73,11 @@ CHOICES = {
 # Which faces a projected sketch splits (split_face): a preset, or faces picked.
 SPLIT_PRESETS = [("Faces on the sketch's plane", {})]
 TYPED, INLINE, PICKED = "typed", "inline", "picked"
+# An empty dropdown says why, rather than giving None to the step (GUI-3).
+EMPTY = {
+    "feature": "This part has no step to repeat yet: add one first",
+    "geometry": "There is no other part to cut: import or make one first",
+}
 EDGE_PRESETS = [
     ("Outer vertical edges", {"parallel": "z", "outer": True}),
     ("All outer edges", {"outer": True}),
@@ -205,6 +210,10 @@ class RuleField(QWidget):
         self._show()
 
     def _load(self, rule: dict) -> None:
+        if not isinstance(rule, dict):  # not a rule at all: shown as typed, never a raise
+            self.choice.setCurrentIndex(self.choice.findData(TYPED))
+            self.typed.setText(json.dumps(rule))
+            return
         key = "edges" if self.entity == "edge" else "face"
         if isinstance(rule.get(key), list) or (key == "face" and isinstance(rule.get(key), str)):
             names = rule[key]
@@ -222,6 +231,7 @@ class RuleField(QWidget):
                 v = rule[data]
                 scale = _unit(kind)[1]
                 self.amount.setText(f"{v * scale:.6g}" if isinstance(v, (int, float)) else str(v))
+                self._kept = (data, self.amount.text(), dict(rule))  # unedited: as it was
                 return
         self.choice.setCurrentIndex(self.choice.findData(TYPED))
         self.typed.setText(json.dumps(rule))
@@ -259,6 +269,9 @@ class RuleField(QWidget):
                 raise ValueError('a typed rule is JSON, such as {"parallel": "z"}') from None
         if isinstance(data, dict):
             return dict(data)
+        kept = getattr(self, "_kept", None)
+        if kept is not None and kept[0] == data and kept[1] == self.amount.text():
+            return dict(kept[2])  # the threshold untouched: never rounded (GUI-29)
         unit, scale = _unit(next(u for _, k, u in FACE_PRESETS if k == data))
         text = self.amount.text().strip()
         try:
@@ -300,10 +313,13 @@ class StepForm(QWidget):
         self.name = QLineEdit(name or label(kind))
         form.addRow("Name", self.name)
         self.widgets = {}
+        self.kept: dict[str, tuple[str, object]] = {}  # field -> (text shown, value)
         for f in self.fields:
             value = args.get(f.name, f.default)
             widget = self._widget(f, value, features, sketches)
             self.widgets[f.name] = widget
+            if isinstance(widget, QLineEdit):  # a value shown short is kept unless edited
+                self.kept[f.name] = (widget.text(), value)
             unit = {"length": f" ({_unit('length')[0]})", "angle": " (deg)"}.get(f.kind, "")
             form.addRow((f.label or label(f.name)) + unit, widget)
 
@@ -367,10 +383,14 @@ class StepForm(QWidget):
         out = {}
         for f in self.fields:
             w = self.widgets[f.name]
+            if isinstance(w, QComboBox) and w.count() == 0:  # nothing to choose (GUI-3)
+                raise ValueError(EMPTY.get(f.kind, f"There is nothing to choose for '{f.label}'"))
             if isinstance(w, QComboBox):
                 out[f.name] = w.currentData()
             elif isinstance(w, (ProfileField, RuleField, QSpinBox)):
                 out[f.name] = w.value()
+            elif f.name in self.kept and self.kept[f.name][0] == w.text():
+                out[f.name] = self.kept[f.name][1]  # untouched: as stored, not rounded (GUI-29)
             else:
                 out[f.name] = _parse(f.kind, w.text())
         return out

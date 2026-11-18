@@ -139,3 +139,6 @@ Not done, and not holding the ADR: menu icons (see above); a full focus-order re
 - **Feedback.** With several jobs, the status bar shows the newest one Cancel can stop (named on the button for screen readers), so a mesh starting beside a solve no longer hides the solve's Cancel; the bar stays while any job runs. `busy` puts back each control's own enabled state. A failed mesh toasts (Show why opens the log, where the error is written as before). Toasts are named by state ("Failed: …"), describe their action, and raise an accessibility alert. The fraction ticker of each job is deleted when the job ends.
 - **Ribbon titles** follow the application font (Settings > Interface > Text size), measured again with the buttons.
 
+## Amended (2026-11-17, ADR 0090 package 10)
+
+Delete takes the Model tree's selection only while the Model tab is current and no other list, table or canvas has the focus, and its message says what Undo brings back. Errors are shown in words, without their code (the log keeps it). Toolbar actions that need a project are greyed out without one. Each panel refreshes on its own, so one that fails doesn't stop the others.

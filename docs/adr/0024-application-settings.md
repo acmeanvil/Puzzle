@@ -44,3 +44,7 @@ The meshing and solver preferences are stored and shown greyed, saying which ADR
 
 - Preferences in each project: shared by everyone who opens it, which is wrong for display choices and invites results to depend on them.
 - Qt's `QSettings`: platform-native storage, but opaque to the CLI and agents, and harder to test than a TOML file.
+
+## Amended (2026-11-17, ADR 0090 package 10)
+
+Every typed quantity is read by `units.parse_quantity`: a bare number is in the unit shown, `5mm` and a decimal comma are read, and a unit that is unknown or of another dimension is refused in words. A form gives back the stored value of a field that wasn't edited, so switching units and pressing OK changes nothing stored. Left: six panels show fixed units (kN, MPa, cm⁴, N·m), labelled but not following Settings > Units (PANEL-19), and optimisation plots are in SI.

@@ -6,6 +6,8 @@ the viewport still records what it would show, so tests can check it.
 
 from __future__ import annotations
 
+import contextlib
+
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QComboBox, QLabel, QVBoxLayout, QWidget
@@ -144,6 +146,35 @@ def selection_surface(mesh: Mesh, group: str):
     return pv.PolyData(mesh.coords, np.concatenate(faces))
 
 
+def _on_copies(state: dict, point) -> dict:
+    """A probe of the shown result at `point`. A symmetric model drawn whole (ADR 0081)
+    is read on the copy the point lies in, mapped back to the part modelled, and the
+    vector or tensor turned with that copy (GUI-13): the nearest point of the part
+    itself would be another place's value."""
+    from puzzle.post.expand import _turn, shown_whole
+    from puzzle.post.probes import at_point
+    from puzzle.post.quantities import compute
+
+    mesh, step, item = state["mesh"], state["step"], state["item"]
+    copies = shown_whole(mesh) or [(np.eye(3), np.zeros(3), 1.0)]
+    point = np.asarray(point, float)
+    best = None
+    for m, shift, sign in copies:
+        found = at_point(mesh, step, item, m.T @ (point - shift))  # M is orthogonal
+        if best is None or found["distance"] < best[0]["distance"]:
+            best = (found, m, sign)
+        if found["distance"] == 0.0:
+            break
+    found, m, sign = best
+    if np.allclose(m, np.eye(3)) and sign == 1.0:
+        return found
+    names = list(found["components"])
+    turned = _turn(np.array([list(found["components"].values())], float), m, sign)
+    value = float(compute(item, turned, step.fields[item.field].components)[0])
+    return found | {"value": value, "components": dict(zip(names, turned[0].tolist(),
+                                                           strict=True))}  # fmt: skip
+
+
 def _display(values, kind: str | None):
     """SI values in the display unit of their kind (ADR 0024), and that unit's name."""
     from puzzle.model.units import DIMENSIONS, pretty, registry
@@ -259,6 +290,13 @@ class SceneView(QWidget):
         self.box_mode = False
         self._band = None
         self._press = None
+        # A click waits out the double-click time: the click of a double-click must not
+        # replace the picks the double-click then toggles (GUI-11).
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self._fire_click)
+        self._pending_click = None
+        self._after_double = False
         self.modifiers = Qt.KeyboardModifier.NoModifier  # of the last double-click
         self._image = None
         self._last = None
@@ -362,11 +400,22 @@ class SceneView(QWidget):
             if self.on_box is not None and rect.width() > 3 and rect.height() > 3:
                 self.on_box(rect, event.modifiers())
             return
+        if self._after_double:  # the release ending a double-click is no click
+            self._after_double = False
+            return
         moved = start is None or (event.position() - start).manhattanLength() > 4
         if not moved and self.on_click is not None and event.button() == Qt.MouseButton.LeftButton:
             point = self.pick_point(event.position())
             if point is not None:
-                self.on_click(point, event.modifiers())
+                from PySide6.QtWidgets import QApplication
+
+                self._pending_click = (point, event.modifiers())
+                self._click_timer.start(QApplication.doubleClickInterval())
+
+    def _fire_click(self) -> None:
+        pending, self._pending_click = self._pending_click, None
+        if pending is not None and self.on_click is not None:
+            self.on_click(*pending)
 
     def pick_point(self, position):
         """The 3D point of the model under a widget position, or None."""
@@ -408,13 +457,22 @@ class SceneView(QWidget):
             camera.Elevation(dy * 0.5)
             camera.OrthogonalizeViewUp()
         elif buttons & Qt.MouseButton.RightButton:
-            camera.Dolly(1.01 ** (-dy))
+            self._zoom(1.01 ** (-dy))
         self.plotter.renderer.ResetCameraClippingRange()
         self.refresh()
         self.camera_moved.emit()
 
+    def _zoom(self, factor: float) -> None:
+        """Closer by `factor`: a dolly in perspective; in orthographic, where a dolly
+        changes nothing seen, the parallel scale (GUI-15)."""
+        camera = self.plotter.camera
+        if camera.GetParallelProjection():
+            camera.SetParallelScale(camera.GetParallelScale() / factor)
+        else:
+            camera.Dolly(factor)
+
     def wheelEvent(self, event) -> None:  # noqa: N802
-        self.plotter.camera.Dolly(1.1 ** (event.angleDelta().y() / 120))
+        self._zoom(1.1 ** (event.angleDelta().y() / 120))
         self.plotter.renderer.ResetCameraClippingRange()
         self.refresh()
         self.camera_moved.emit()
@@ -428,7 +486,7 @@ class SceneView(QWidget):
             and event.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
         )
         if pinch:
-            self.plotter.camera.Dolly(1.0 + event.value())
+            self._zoom(1.0 + event.value())
             self.plotter.renderer.ResetCameraClippingRange()
             self.refresh()
             self.camera_moved.emit()
@@ -436,6 +494,9 @@ class SceneView(QWidget):
         return super().event(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self._click_timer.stop()  # its first click is part of it: not a replace
+        self._pending_click = None
+        self._after_double = True
         if self.on_double_click is None:
             return
         import vtk
@@ -465,7 +526,10 @@ class SceneView(QWidget):
         camera = self.plotter.camera
         position, focal = np.array(camera.position), np.array(camera.focal_point)
         distance = np.linalg.norm(position - focal)
-        scale = 2 * distance * np.tan(np.radians(camera.view_angle) / 2) / max(self.height(), 1)
+        if camera.GetParallelProjection():  # the view's height is twice the parallel scale
+            scale = 2 * camera.GetParallelScale() / max(self.height(), 1)
+        else:
+            scale = 2 * distance * np.tan(np.radians(camera.view_angle) / 2) / max(self.height(), 1)
         forward = (focal - position) / distance
         up = np.array(camera.up)
         right = np.cross(forward, up)
@@ -968,12 +1032,14 @@ class Viewport(QWidget):
         self._bolt_marks = []
         self._clear_labels()
         self._update_click()
+        self._source_mesh = mesh  # what was given: a redraw starts from it (GUI-12)
         hidden = sorted(self.hidden_parts(mesh)) if self.hidden_parts else []
         bodies = sorted(self.hidden_bodies(mesh)) if self.hidden_bodies else []
         if hidden or bodies:  # hidden and suppressed geometry isn't drawn
-            key = (id(mesh), tuple(hidden), tuple(bodies))
-            if getattr(self, "_shown_key", None) != key:
-                self._shown_key = key
+            key = (tuple(hidden), tuple(bodies))
+            # Held, and compared by identity: an id can be a new mesh's (GUI-17).
+            if getattr(self, "_shown_src", None) is not mesh or self._shown_key != key:
+                self._shown_src, self._shown_key = mesh, key
                 self._shown_mesh = without_parts(mesh, hidden, self.boundaries, bodies)
             mesh = self._shown_mesh
         colours = dict(self.part_colours(mesh) or {}) if self.part_colours else {}
@@ -1151,6 +1217,22 @@ class Viewport(QWidget):
             self.set_box_mode(False)
         self._update_click()
 
+    def cancel_capture(self) -> None:
+        """A tool waiting for a point no longer is: told with None, so it tidies up
+        (Esc in the view, another project opened; GUI-18)."""
+        callback = self.capture
+        if callback is None:
+            return
+        self.capture_point(None)
+        with contextlib.suppress(Exception):  # its owner's tidy-up, never in the way
+            callback(None)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if event.key() == Qt.Key.Key_Escape and self.capture is not None:
+            self.cancel_capture()
+            return
+        super().keyPressEvent(event)
+
     def capture_point(self, callback, snap: str = "corner") -> None:
         """Hand the next double-clicked point on the model to `callback(xyz)` (metres,
         undeformed), then go back to what double-click did before; None cancels. For
@@ -1258,7 +1340,7 @@ class Viewport(QWidget):
 
     def _picks_changed(self) -> None:
         if self.mesh is not None:
-            self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
+            self.show_mesh(self._unfiltered(), self.highlight, self.highlight_entities)
         self.picked_changed.emit(list(self.picked))
 
     def extend_picks(self, max_angle: float = 20.0) -> None:
@@ -1586,8 +1668,15 @@ class Viewport(QWidget):
         if self.plotter is not None:
             self.view.refresh()
 
+    def _unfiltered(self):
+        """The mesh as given to `show_mesh`, before hidden parts were left out: drawn
+        again from it, a pick neither rebuilds the filtered copy nor refits the camera."""
+        source = getattr(self, "_source_mesh", None)
+        return source if source is not None else self.mesh
+
     def clear(self) -> None:
         self.result_state = None
+        self._source_mesh = self._shown_src = self._shown_mesh = None
         self.probes = []
         self._clear_labels()
         self.shown = {}
@@ -1760,7 +1849,7 @@ class Viewport(QWidget):
             self.redraw_needed.emit()
         elif self.mesh is not None:
             glyphs = self.glyphs
-            self.show_mesh(self.mesh, self.highlight, self.highlight_entities)
+            self.show_mesh(self._unfiltered(), self.highlight, self.highlight_entities)
             self.show_symbols(glyphs)
 
     def set_symbols_shown(self, on: bool) -> None:
@@ -1801,14 +1890,13 @@ class Viewport(QWidget):
         return self._probe_at(np.asarray(point, float), shown, add)
 
     def _probe_at(self, point, shown, add: bool) -> dict:
-        from puzzle.post.probes import at_point
 
         state = self.result_state
         if state.get("revolved") is not None:  # a revolved view: read on the section
             from puzzle.post.revolve import to_section
 
             point = to_section(point)
-        found = at_point(state["mesh"], state["step"], state["item"], point)
+        found = _on_copies(state, point)
         shown_value, unit = _display(np.array([found["value"]]), state["item"].unit)
         probe = found | {
             "shown": float(shown_value[0]),
@@ -2353,7 +2441,9 @@ class Viewport(QWidget):
 
     def set_style(self, **changes) -> None:
         """Edges on results and previews, wireframe, orthographic: kept across redraws."""
-        redraw = "display" in changes and changes["display"] != self.style["display"]
+        redraw = any(k in changes and changes[k] != self.style[k] for k in ("display",))
+        # Edges switched off: drawn again, since each actor's own edges aren't kept (GUI-16)
+        redraw = redraw or (changes.get("edges") is False and self.style["edges"])
         self.style.update(changes)
         self._apply_style()
         if redraw:  # the model is drawn again with its edges (or without)

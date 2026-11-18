@@ -75,16 +75,14 @@ class LiveForm(QuickForm):
             self._changed_hook(self.values())
 
 
-def quantity(text: str, unit: str) -> dict:
+def quantity(text: str, unit: str, kind: str | None = None) -> dict:
     """ "6 mm" -> {"value": 6, "unit": "mm"}; a bare number is in `unit` (the unit
-    shown, ADR 0024). Raises ValueError on an unknown unit or no number."""
-    from puzzle.model.units import known, plain
+    shown, ADR 0024); the unit must measure what `unit` does (or `kind`). Raises
+    ValueError in words (`units.parse_quantity`, PANEL-11, PANEL-17)."""
+    from puzzle.model.units import parse_quantity
 
-    number, _, given = text.strip().partition(" ")
-    given = plain(given.strip() or unit)
-    if not known(given):
-        raise ValueError(f"unknown unit '{given}'")
-    return {"value": float(number), "unit": given}
+    value, given = parse_quantity(text, unit, kind)
+    return {"value": value, "unit": given}
 
 
 def shown_length(metres: float) -> str:

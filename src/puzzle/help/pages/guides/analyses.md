@@ -100,7 +100,8 @@ bends.
   OpenFOAM. The step's `iterations` defaults to 500 on Code_Saturne and 2000 on OpenFOAM.
 - **Custom PDE**: your own equation in weak form, one Lagrange unknown, scalar or vector,
   steady or transient, on FEniCSx. Its conditions are Fixed value and Flux into the body.
-  It runs only in a trusted project.
+  Adding it asks for its unknown and its weak form in one form, starting from a Poisson
+  equation; its coefficients are added in Properties. It runs only in a trusted project.
 
 Most solvers solve one physics per step. For thermal stress, solve heat first and pass
 the temperature into a structural study with Model → Studies → New transfer….

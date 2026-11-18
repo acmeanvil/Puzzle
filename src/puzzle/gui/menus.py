@@ -575,9 +575,51 @@ def _operator_menu(window, menu, source=None, port="out", title="New operator") 
 
 def add_physics(window, comp: Component, kind: str):
     value = {"type": kind, "features": []}
+    if kind == "custom_pde":  # it needs its equation: asked in one form (GUI-30)
+        equation = ask_custom_equation(window)
+        if equation is None:
+            return None
+        value["equation"] = equation
     return window.submit(
         Edit(object=str(comp.id), ops=[EditOp(op="append", path="physics", value=value)])
     )
+
+
+def ask_custom_equation(window) -> dict | None:
+    """A custom PDE's unknown and weak form (FEniCSx), in one form; a Poisson equation
+    to start from. Coefficients are added in Properties."""
+    from puzzle.gui.quick_form import Ask
+
+    def check(v):
+        name = v.get("name", "")
+        if not name.isidentifier():
+            return "the unknown's name is one word, such as u"
+        if f"v_{name}" not in v.get("weak_form", ""):
+            return f"the weak form uses the test function v_{name}"
+        return None
+
+    got = window.ask_form(
+        "Custom PDE",
+        [
+            Ask("name", "Unknown", kind="text", default="u"),
+            Ask("shape", "Kind", choices=[("Scalar", "scalar"), ("Vector", "vector")]),
+            Ask("degree", "Element degree", choices=[("1 (linear)", 1), ("2 (quadratic)", 2)]),
+            Ask(
+                "weak_form",
+                "Weak form F = 0 (UFL)",
+                kind="multiline",
+                default="inner(grad(u), grad(v_u)) * dx",
+            ),
+        ],  # fmt: skip
+        intro="The residual F of the equation in weak form, solved as F = 0 by FEniCSx "
+        "(a trusted project only). Its test function is v_<unknown>; dx and ds take "
+        "selection names.",
+        check=check,
+    )
+    if got is None:
+        return None
+    unknown = {"name": got["name"], "shape": got["shape"], "degree": got["degree"]}
+    return {"unknowns": [unknown], "weak_form": got["weak_form"]}
 
 
 def add_feature(window, comp: Component, index: int, spec):
@@ -1316,6 +1358,8 @@ def apply_step(window, geo: Geometry, kind: str, name: str, args: dict, *, index
         window.statusBar().showMessage(f"{geo.name} already has a step '{name}'", 8000)
         return None
     step = {"kind": kind, "name": name, "args": args}
+    if geo.source is not None:  # a file part takes a step as a history, one command (GUI-5)
+        return window.submit(Edit(object=str(geo.id), ops=history_ops(geo, [step])))
     if at is None or at >= len(geo.history):
         op = EditOp(op="append", path="history", value=step)
         return window.submit(Edit(object=str(geo.id), ops=[op]))
@@ -1350,19 +1394,27 @@ def to_history(window, geo: Geometry):
     """A file geometry becomes a history whose first step imports the file, so
     preparation and modelling steps can follow it. Its face-N selections become
     `<file>/face-N` (an import names the file's faces in the same order)."""
-    step = {"kind": "import", "name": "CAD", "args": {"file": geo.source}}
+    return window.submit(Edit(object=str(geo.id), ops=history_ops(geo)))
+
+
+def imported_step(geo: Geometry) -> dict:
+    """The step that reads a file part's file, as `to_history` makes it."""
+    return {"kind": "import", "name": "CAD", "args": {"file": geo.source}}
+
+
+def history_ops(geo: Geometry, then: list[dict] | tuple = ()) -> list[EditOp]:
+    """The edits that make a file geometry a history: its import, then `then`."""
     selections = []
     for s in geo.selections:
         members = s.members if s.entity == "body" else [f"CAD/{m}" for m in s.members]
         if s.entity == "body":
             members = ["Body"]
         selections.append({**s.model_dump(mode="json"), "members": members})
-    ops = [
-        EditOp(op="set", path="history", value=[step]),
+    return [
+        EditOp(op="set", path="history", value=[imported_step(geo), *then]),
         EditOp(op="set", path="source", value=None),
         EditOp(op="set", path="selections", value=selections),
     ]
-    return window.submit(Edit(object=str(geo.id), ops=ops))
 
 
 def check_geometry_of(window, geo: Geometry):

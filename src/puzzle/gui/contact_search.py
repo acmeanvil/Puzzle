@@ -79,7 +79,11 @@ class ContactSearch(QDialog):
         row = QHBoxLayout()
         row.addWidget(QLabel(f"Gap up to ({self.length})"))
         self.tolerance = QDoubleSpinBox()
-        self.tolerance.setDecimals(4)
+        # Down to a micrometre in any unit shown: four decimals of a metre rounded every
+        # gap under 0.1 mm to zero, the automatic tolerance (PANEL-28).
+        import math
+
+        self.tolerance.setDecimals(max(4, math.ceil(6 - math.log10(self.per_metre))))
         self.tolerance.setRange(0.0, 1e9)
         self.tolerance.setSpecialValueText("0.5 % of the model")
         row.addWidget(self.tolerance)

@@ -163,3 +163,7 @@ All in `tests/integration/test_symmetry_solved.py`:
 - **Cyclic symmetry through Puzzle's own constraint equations on every solver:** each
   solver's own cyclic support handles phase per nodal diameter in modal analysis, which
   plain equations don't.
+
+## Amended (2026-11-17, ADR 0090 package 10)
+
+A probe dropped on a mirrored or repeated copy of a model drawn whole reads the place it was dropped on: the point is mapped back to the part modelled and the vector or tensor turned with that copy (`viewport._on_copies`). It had read the nearest point of the modelled part.

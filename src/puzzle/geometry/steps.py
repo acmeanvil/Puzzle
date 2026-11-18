@@ -117,8 +117,8 @@ STEPS: dict[str, list[StepField]] = {
         StepField("angle", "angle", 30.0, "Angle (twist, bend)"),
         StepField("factor", "number", 0.8, "End size (taper)"),
         StepField("toward", "axis", "y", "Bent toward (bend)"),
-        StepField(
-            "corners", "rule", [[0.0, 0.0, 0.0]] * 8, "Corner moves (box; m, eight [dx, dy, dz])"
+        StepField(  # eight moves, typed as points are (GUI-4: a "rule" field took a dict)
+            "corners", "points", [[0.0, 0.0, 0.0]] * 8, "Corner moves (box, mm): dx, dy, dz; …"
         ),
     ],
     "thicken": [

@@ -91,6 +91,15 @@ def set_cyclic(window, comp: Component):
         )
         return None
     now = comp.cyclic
+    axes = list(AXES)
+    kept = None  # an axis or origin the three choices can't show is offered as it is
+    if now is not None:
+        text = ",".join(f"{v:g}" for v in now.axis)
+        if text not in {v for _, v in AXES} or any(now.origin):
+            kept = "kept"
+            o = ", ".join(f"{v:g}" for v in now.origin)
+            a = ", ".join(f"{v:g}" for v in now.axis)
+            axes.insert(0, (f"As it is: ({a}) through ({o}) m", kept))
     asks = [
         Ask("source", "First cut face", choices=[(f, f) for f in faces],
             default=now.source if now else faces[0]),
@@ -98,17 +107,24 @@ def set_cyclic(window, comp: Component):
             default=now.target if now else faces[1]),
         Ask("sectors", "Sectors in the whole", kind="text",
             default=str(now.sectors) if now else "12"),
-        Ask("axis", "Axis (through the origin)", choices=AXES,
-            default=",".join(f"{v:g}" for v in now.axis) if now else "0,0,1"),
+        Ask("axis", "Axis (through the origin)", choices=axes,
+            default=kept or (",".join(f"{v:g}" for v in now.axis) if now else "0,0,1")),
     ]  # fmt: skip
+
+    def check(v):  # PANEL-15: one face can't be both cuts
+        if not (v["sectors"].strip().isdigit() and int(v["sectors"]) >= 2):
+            return "sectors is a whole number, 2 or more"
+        if v["source"] == v["target"]:
+            return "the two cut faces must differ"
+        return None
+
     got = window.ask_form(
         f"Cyclic symmetry of {comp.name}", asks,
         intro="The component is one sector; the second cut face is the first turned by "
         "360°/sectors about the axis (right-handed). Each node there moves as its twin on "
         "the first, turned. Loads repeat in every sector: the whole carries sectors times "
         "them. Static, transient and heat studies.",
-        check=lambda v: None if v["sectors"].strip().isdigit() and int(v["sectors"]) >= 2
-        else "sectors is a whole number, 2 or more",
+        check=check,
     )  # fmt: skip
     if got is None:
         return None
@@ -116,8 +132,12 @@ def set_cyclic(window, comp: Component):
         "source": got["source"],
         "target": got["target"],
         "sectors": int(got["sectors"]),
-        "origin": (0.0, 0.0, 0.0),
-        "axis": tuple(float(v) for v in got["axis"].split(",")),
+        "origin": tuple(now.origin) if got["axis"] == "kept" else (0.0, 0.0, 0.0),
+        "axis": (
+            tuple(now.axis)
+            if got["axis"] == "kept"
+            else tuple(float(v) for v in got["axis"].split(","))
+        ),
     }
     return window.submit(Edit(object=str(comp.id),
                               ops=[EditOp(op="set", path="cyclic", value=value)]))  # fmt: skip

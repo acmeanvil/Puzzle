@@ -82,7 +82,10 @@ def why_not() -> str | None:
 
 
 def folder_for(project_root: Path, run_id: str) -> Path:
-    return Path(project_root) / "exports" / "paraview" / run_id
+    """The run's folder of ParaView files; a derived result's `derived:<id>` written as
+    `derived-<id>`, since Windows refuses a colon in a folder name (PANEL-23)."""
+    safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in run_id)
+    return Path(project_root) / "exports" / "paraview" / safe
 
 
 def write(folder: Path, shown, view: View, mesh=None, results=None) -> Path:

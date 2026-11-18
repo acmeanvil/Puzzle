@@ -34,24 +34,38 @@ ENDS = [("A nut", "nut"), ("A tapped hole", "tapped")]
 HEADERS = ["Step", "Quantity", "Value"]
 
 
-def _si(text: str, unit: str, what: str) -> float:
+def _si(text: str, unit: str, what: str, positive: bool = False) -> float:
     from puzzle.model.schema import Quantity
 
     try:
-        return Quantity(**quantity(text, unit)).to_si()
+        value = Quantity(**quantity(text, unit)).to_si()
     except ValueError as exc:
         raise ValueError(f"{what}: {exc}") from None
+    if positive and not value > 0:  # VDI 2230 divides by it (PANEL-12)
+        raise ValueError(f"{what}: must be more than zero")
+    return value
 
 
-def _optional(text: str, unit: str, what: str) -> float | None:
-    return _si(text, unit, what) if (text or "").strip() else None
+def _optional(text: str, unit: str, what: str, positive: bool = False) -> float | None:
+    return _si(text, unit, what, positive) if (text or "").strip() else None
 
 
-def _number(text: str, what: str) -> float:
+def _number(text: str, what: str, low: float | None = None, whole: bool = False,
+            above: bool = False) -> float:  # fmt: skip
+    """A plain number: finite, at least (or, `above`, more than) `low`, whole if asked."""
+    import math
+
     try:
-        return float(text)
-    except ValueError:
-        raise ValueError(f"{what}: not a number") from None
+        value = float(text.strip().replace(",", ".") if text.count(",") == 1 else text)
+    except (ValueError, AttributeError):
+        raise ValueError(f"{what}: '{text}' is not a number") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{what}: must be finite")
+    if low is not None and (value <= low if above else value < low):
+        raise ValueError(f"{what}: must be {'more than' if above else 'at least'} {low:g}")
+    if whole and value != int(value):
+        raise ValueError(f"{what}: a whole number")
+    return value
 
 
 def arguments(values: dict) -> dict:
@@ -60,22 +74,23 @@ def arguments(values: dict) -> dict:
     grade = values.get("grade", "10.9")
     out = {
         "size": values["size"],
-        "clamp_length": _si(values.get("clamp_length", ""), length, "clamp length"),
+        "clamp_length": _si(values.get("clamp_length", ""), length, "clamp length", True),
         "grade": None if grade == "rp02" else grade,
         "head": values.get("head", "hex"),
         "tapped": values.get("end") == "tapped",
         "shank_length": _optional(values.get("shank_length"), length, "shank") or 0.0,
-        "e_bolt": _si(values.get("e_bolt", ""), "GPa", "the bolt's modulus"),
-        "e_plate": _si(values.get("e_plate", ""), "GPa", "the plates' modulus"),
-        "e_nut": _optional(values.get("e_nut"), "GPa", "the nut's modulus"),
-        "rp02": _si(values.get("rp02", ""), "MPa", "Rp0.2") if grade == "rp02" else None,
-        "mu_thread": _number(values.get("mu_thread", ""), "thread friction"),
-        "mu_head": _number(values.get("mu_head", ""), "head friction"),
-        "n": _number(values.get("n", ""), "load introduction n"),
+        "e_bolt": _si(values.get("e_bolt", ""), "GPa", "the bolt's modulus", True),
+        "e_plate": _si(values.get("e_plate", ""), "GPa", "the plates' modulus", True),
+        "e_nut": _optional(values.get("e_nut"), "GPa", "the nut's modulus", True),
+        "rp02": _si(values.get("rp02", ""), "MPa", "Rp0.2", True) if grade == "rp02" else None,
+        "mu_thread": _number(values.get("mu_thread", ""), "thread friction", 0.0),
+        "mu_head": _number(values.get("mu_head", ""), "head friction", 0.0),
+        "n": _number(values.get("n", ""), "load introduction n", 0.0),
         "axial_load": _optional(values.get("axial_load"), "N", "axial load"),
         "rz": _si(values.get("rz", ""), "um", "Rz"),
-        "interfaces": int(_number(values.get("interfaces", ""), "interfaces")),
-        "tightening_factor": (_number(values["tightening_factor"], "tightening factor")
+        "interfaces": int(_number(values.get("interfaces", ""), "interfaces", 0.0, whole=True)),
+        "tightening_factor": (_number(values["tightening_factor"], "tightening factor", 0.0,
+                                      above=True)
                               if (values.get("tightening_factor") or "").strip() else None),
     }  # fmt: skip
     return out
@@ -269,8 +284,8 @@ def vdi_check(window, bolt_type=None, length: float | None = None):
     def show(v):
         try:
             view.show_result(vdi2230.check(**arguments(v)))
-        except (ValueError, KeyError) as exc:
-            view.show_result(None, str(exc).strip("'\""))
+        except (ValueError, KeyError, ArithmeticError) as exc:  # never a popup (PANEL-12)
+            view.show_result(None, str(exc).strip("'\"") or "These values give no answer")
 
     sizes = [(s.name, s.name) for s in bolts.SIZES]
     d = lambda key, default: start.get(key, default)  # noqa: E731

@@ -550,8 +550,14 @@ class SettingsDialog(QDialog):
             box.setCurrentIndex(max(box.findData(pref.default), 0))
 
     def save(self) -> None:
+        """The project's autonomy first: its "act" sign-off declined keeps the dialog
+        open with nothing saved, so Cancel then discards everything (PANEL-32)."""
         from puzzle.agent.settings import save_settings
 
+        if self.who is not None and not set_autonomy(
+            self.project_window, self.may.currentData(), self.who.currentData()
+        ):
+            return  # the second sign-off for "act" was declined: stay open, unsaved
         for key, box in self.boxes.items():
             self.settings.set(key, box.currentData())
         self.settings.save()
@@ -560,10 +566,6 @@ class SettingsDialog(QDialog):
         self.agent.model = self.model.text().strip()
         self.agent.send_images = self.images.currentData()
         save_settings(self.agent, self.agent_path)
-        if self.who is not None and not set_autonomy(
-            self.project_window, self.may.currentData(), self.who.currentData()
-        ):
-            return  # the second sign-off for "act" was declined: stay open
         self.accept()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt's name

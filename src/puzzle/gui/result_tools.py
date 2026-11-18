@@ -66,7 +66,14 @@ def _run_of(window, source_id: str):
 
     store = window._store()
     record = derived.run_for(window.session.project, store, _uuid(source_id))
-    return store.read_mesh(record.mesh_id), store.read_results(record.run_id)
+    # A stored run never changes: the last one read is kept, so a form's choices,
+    # rebuilt on every keystroke, don't read the whole run again each time (PANEL-13).
+    key = (str(store.root), record.run_id)
+    kept = getattr(window, "_run_read", None)
+    if kept is None or kept[0] != key:
+        kept = (key, (store.read_mesh(record.mesh_id), store.read_results(record.run_id)))
+        window._run_read = kept
+    return kept[1]
 
 
 def selection_choices(window, source_id: str, supports_first: bool = False) -> list:

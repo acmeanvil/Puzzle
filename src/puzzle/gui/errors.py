@@ -56,6 +56,26 @@ def install(path: Path | None = None) -> Path:
     return path
 
 
+def plain(exc: BaseException) -> str:
+    """An error as a person reads it: a PuzzleError's message with the first reason of
+    its `details["errors"]` when the message lacks it, pydantic's "Value error, "
+    prefix gone; anything else by its own text (GUI-5)."""
+    from puzzle.errors import PuzzleError
+
+    if not isinstance(exc, PuzzleError):
+        text = str(exc).strip()
+        return text.removeprefix("Value error, ") or type(exc).__name__
+    text = exc.message
+    errors = (exc.details or {}).get("errors")
+    first = errors[0] if isinstance(errors, list) and errors else None
+    if isinstance(first, dict) and first.get("message"):
+        reason = str(first["message"]).removeprefix("Value error, ")
+        if reason not in text:
+            where = str(first.get("path") or "")
+            text = f"{text}: {where + ': ' if where else ''}{reason}"
+    return text.replace("Value error, ", "")
+
+
 def _hook(kind, value, tb) -> None:
     text = "".join(traceback.format_exception(kind, value, tb))
     log = _state.get("log")

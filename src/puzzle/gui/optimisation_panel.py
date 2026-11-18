@@ -461,10 +461,11 @@ class OptimisationPanel(QWidget):
         self.plot_of.clear()
         if opt.objective is not None:
             self.plot_of.addItem("Objective by point", "objective")
-            for v in opt.variables:
-                self.plot_of.addItem(f"Objective against {v.name}", v.name)
+            for v in opt.variables:  # keyed apart from constraints: a variable c1 (PANEL-16)
+                self.plot_of.addItem(f"Objective against {v.name}", f"variable:{v.name}")
         for i, c in enumerate(opt.constraints):
-            self.plot_of.addItem(f"{names.get(c.source, 'Constraint')} by point", f"c{i}")
+            self.plot_of.addItem(f"{names.get(c.source, 'Constraint')} by point",
+                                 f"constraint:{i}")  # fmt: skip
         keys = optimise.output_keys(opt)
         label = {k: names.get(o.source, k) for k, o in zip(
             keys, ([opt.objective] if opt.objective else []) + list(opt.constraints),
@@ -495,10 +496,11 @@ class OptimisationPanel(QWidget):
         if what == "objective":
             pts = [(float(p.index), p.objective) for p in done if p.objective is not None]
             self.curve.x_label = "Point"
-        elif what.startswith("c") and what[1:].isdigit():
-            i = int(what[1:])
+        elif what.startswith("constraint:"):
+            i = int(what.split(":", 1)[1])
             pts = [(float(p.index), p.constraints[i]) for p in done
-                   if p.constraints and p.constraints[i] is not None]  # fmt: skip
+                   if p.constraints and i < len(p.constraints)
+                   and p.constraints[i] is not None]  # fmt: skip
             self.curve.x_label = "Point"
         elif what.startswith("pareto:"):
             self._pareto(*what.split(":")[1:])
@@ -507,8 +509,10 @@ class OptimisationPanel(QWidget):
             self._modelled(what)
             return
         else:
-            pts = sorted((p.values[what], p.objective) for p in done if p.objective is not None)
-            self.curve.x_label = f"{what} (SI)"
+            name = what.split(":", 1)[1] if what.startswith("variable:") else what
+            pts = sorted((p.values[name], p.objective) for p in done
+                         if p.objective is not None and name in p.values)  # fmt: skip
+            self.curve.x_label = f"{name} (SI)"
         self.curve.set_series([(self.plot_of.currentText(), pts)])
 
     def _modelled(self, what: str) -> None:

@@ -46,6 +46,26 @@ ROLE = Qt.ItemDataRole.UserRole
 FROM_TYPE = "From its bolt type"
 
 
+class NumericItem(QTableWidgetItem):
+    """A cell sorted by its value ("8 mm" before "12 mm"), by its words otherwise
+    (PANEL-14: sizes and preloads sorted as text)."""
+
+    def key(self):
+        from puzzle.model.units import parse_quantity, to_si
+
+        try:
+            value, unit = parse_quantity(self.text(), "dimensionless", "any")
+            return to_si(value, unit)
+        except Exception:  # noqa: BLE001 - not a quantity: its words
+            return None
+
+    def __lt__(self, other) -> bool:
+        a, b = self.key(), other.key() if isinstance(other, NumericItem) else None
+        if a is not None and b is not None:
+            return a < b
+        return self.text() < other.text()
+
+
 @dataclass(frozen=True)
 class Column:
     title: str
@@ -196,7 +216,7 @@ class PropertiesTab(QWidget):
         for r, row in enumerate(self.rows):
             for c, column in enumerate(COLUMNS):
                 text, inherited = self._text(row, column, names)
-                item = QTableWidgetItem(text)
+                item = NumericItem(text)
                 item.setData(ROLE, (str(row.component.id), row.index))
                 if column.field is None:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)

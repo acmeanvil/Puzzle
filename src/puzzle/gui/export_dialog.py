@@ -109,7 +109,7 @@ def export_results(window, source: str | None = None):
             record.run_id,
             got["format"],
             Path(path),
-            step=got["step"],
+            step=got.get("step", -1),  # a format with no step option has no Step (PANEL-2)
             quantity=got.get("quantity"),
             selection=got.get("selection") or None,
             scale=float(got.get("scale") or 1.0),

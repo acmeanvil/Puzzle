@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from puzzle.gui.choices import run_label
 from puzzle.gui.quick_form import Ask
 from puzzle.gui.theme import role
 
@@ -48,10 +49,13 @@ def _targets(project, comp) -> list[tuple[str, str]]:
 
 
 def _quantity(text: str):
+    """A length as typed: a bare number in the unit shown, the unit checked (PANEL-5)."""
     from puzzle.model.schema import Quantity
+    from puzzle.model.units import parse_quantity
+    from puzzle.settings import length_unit
 
-    number, _, unit = text.strip().partition(" ")
-    return Quantity(value=float(number), unit=unit.strip() or "m")
+    value, unit = parse_quantity(text, length_unit()[0], "length")
+    return Quantity(value=value, unit=unit)
 
 
 def _check_form(values: dict) -> str | None:
@@ -60,8 +64,8 @@ def _check_form(values: dict) -> str | None:
         if text:
             try:
                 _quantity(text)
-            except ValueError:
-                return f"'{text}': give a number and a unit, e.g. 10 ft"
+            except ValueError as exc:
+                return str(exc)
     for key in ("k_x", "k_y", "deflection_limit"):
         text = (values.get(key) or "").strip()
         if text:
@@ -77,8 +81,27 @@ def edit_design(window, comp):
     """One form setting a member design entry, as one Edit of the component."""
     from puzzle.commands.model import Edit, EditOp
     from puzzle.model.schema import MemberDesign
+    from puzzle.settings import length_unit
 
     targets = _targets(window.session.project, comp)
+    entries = {d.selection: d for d in comp.member_design}
+
+    def existing(key: str, blank: str = ""):
+        """A field starts from the entry the chosen members already have (PANEL-6)."""
+
+        def text(v: dict) -> str:
+            entry = entries.get(v.get("selection"))
+            value = getattr(entry, key, None) if entry is not None else None
+            if value is None:
+                return blank
+            if hasattr(value, "unit"):  # a length, as stored, every digit (no rewrite)
+                return f"{value.value:.15g} {value.unit}"
+            return f"{value:.15g}"
+
+        return text
+
+    first = entries.get(targets[0][1]) if targets else None
+    unit = length_unit()[0]
     if len(targets) == 1:
         window.toasts.show(
             "This component has no frame: make one with a frame geometry step.", state="info"
@@ -88,49 +111,59 @@ def edit_design(window, comp):
         f"Member design of {comp.name}",
         [
             Ask("selection", "Members", choices=targets),
-            Ask("method", "Method", choices=METHODS),
+            Ask(
+                "method",
+                "Method",
+                choices=METHODS,
+                default=first.method if first is not None else None,
+            ),
             Ask(
                 "unbraced_length",
-                "Unbraced length L_b",
+                f"Unbraced length L_b ({unit})",
                 kind="text",
-                default="",
+                follow=existing("unbraced_length"),
                 help="lateral-torsional buckling; blank: the member's length",
             ),
             Ask(
                 "length_x",
-                "Buckling length, strong axis",
+                f"Buckling length, strong axis ({unit})",
                 kind="text",
-                default="",
+                follow=existing("length_x"),
                 help="blank: the member's length",
             ),
             Ask(
-                "length_y", "Buckling length, weak axis", kind="text", default="", help="blank: L_b"
+                "length_y",
+                f"Buckling length, weak axis ({unit})",
+                kind="text",
+                follow=existing("length_y"),
+                help="blank: L_b",
             ),
-            Ask("k_x", "K, strong axis", kind="text", default="1"),
-            Ask("k_y", "K, weak axis", kind="text", default="1"),
+            Ask("k_x", "K, strong axis", kind="text", follow=existing("k_x", "1")),
+            Ask("k_y", "K, weak axis", kind="text", follow=existing("k_y", "1")),
             Ask(
                 "deflection_limit",
                 "Deflection limit L/…",
                 kind="text",
-                default="",
+                follow=existing("deflection_limit"),
                 help="e.g. 360; blank: not checked",
             ),
         ],  # fmt: skip
         intro="How members are checked. The code follows the material: carbon and low-alloy "
-        "steel by AISC 360-16. The most specific entry for a member wins.",
+        "steel by AISC 360-16. The most specific entry for a member wins; members that have "
+        "one start from it. A bare length is in the unit shown.",
         check=_check_form,
     )
     if got is None:
         return None
-    values = {"selection": got["selection"], "method": got["method"]}
+    old = entries.get(got["selection"])  # what the form doesn't show (code, C_b) is kept
+    values = old.model_dump() if old is not None else {}
+    values.update(selection=got["selection"], method=got["method"])
     for key in ("unbraced_length", "length_x", "length_y"):
-        if got[key].strip():
-            values[key] = _quantity(got[key])
+        values[key] = _quantity(got[key]) if got[key].strip() else None
     for key in ("k_x", "k_y"):
-        if got[key].strip():
-            values[key] = float(got[key])
-    if got["deflection_limit"].strip():
-        values["deflection_limit"] = float(got["deflection_limit"])
+        values[key] = float(got[key]) if got[key].strip() else 1.0
+    text = got["deflection_limit"].strip()
+    values["deflection_limit"] = float(text) if text else None
     entry = MemberDesign(**values)
     entries = [d for d in comp.member_design if d.selection != entry.selection] + [entry]
     value = [d.model_dump(mode="json") for d in entries]
@@ -194,8 +227,7 @@ class MemberTable(QWidget):
             study = studies.get(r.study_id)
             comp = session.project.objects.get(study.component) if study else None
             if isinstance(comp, Component) and frame_lines(session.project, comp):
-                when = r.recorded_at.strftime("%Y-%m-%d %H:%M")
-                self.run.addItem(f"{r.study_name} ({r.solver}, {when})", r.run_id)
+                self.run.addItem(run_label(r), r.run_id)
         found = self.run.findData(chosen)
         self.run.setCurrentIndex(found if found >= 0 else 0)
         self.run.blockSignals(False)
@@ -211,8 +243,8 @@ class MemberTable(QWidget):
             self.note.setText("Run a frame study to check its members here.")
         else:
             store, project = self.window._store(), self.window.session.project
-            record = next(r for r in store.runs() if r.run_id == run_id)
-            try:
+            try:  # a run deleted since it was listed is said, never a raise (PANEL-10)
+                record = store.get_run(run_id)
                 study = next(o for o in project.of_type(Study) if str(o.id) == record.study_id)
                 comp = project.get(study.component, Component)
                 self.found = member_checks(project, comp, store.read_mesh(record.mesh_id),
