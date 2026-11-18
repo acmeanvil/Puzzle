@@ -99,3 +99,7 @@ Not done yet:
 - Code_Aster's MPI build check on a host. It assumes no MPI there, so it runs on one process.
 - A test against a real Slurm (a Slurm container in CI is the fallback).
 - Cloud batch (decision 5), which needs a decision of its own.
+
+## Amended (2026-11-18, ADR 0090 package 12)
+
+A cancel stops the run's process group with `kill -s TERM -- -pgid`. The form written before, `kill -TERM -- -pgid`, fails in dash, the `sh` of Debian and Ubuntu, which reads the `--` as a pid: the driver was stopped by its own pid and the solver went on running. Still open (ADR 0072): a cancel before the driver has written its group finds nothing to stop.
