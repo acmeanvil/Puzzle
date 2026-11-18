@@ -62,7 +62,7 @@ def heat(p):
 
 # --- OP-1: a before-solving formula that raises ----------------------------------------
 
-BROKEN = ["10.0**400", "'a' * 3", "20 degC + 5 degC", "min()", "2**2**2**2**2", "1/0"]
+BROKEN = ["10.0**400", "'a' * 3", "1 m + 1 s", "min()", "2**2**2**2**2", "1/0"]
 
 
 @pytest.mark.parametrize("text", BROKEN)

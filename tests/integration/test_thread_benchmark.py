@@ -501,6 +501,7 @@ def _beam_bolt_model(solver):
     return p, study
 
 
+@pytest.mark.heavy  # 24 min on GitHub's Linux machine (a minute here, with PARDISO)
 @over("calculix")
 def test_a_beam_bolt_shares_its_thread_as_a_solid_screw(tmp_path, solver):
     """ADR 0076 step 4: a beam bolt's tapped end as a thread (a core line with flank
@@ -598,6 +599,7 @@ def test_code_aster_beam_bolt_threads_match_calculix(tmp_path, solver):
     assert a_bolt[0] == pytest.approx(LOAD, rel=0.01)
 
 
+@pytest.mark.heavy  # 49 min on GitHub's Linux machine (69 s here, with PARDISO)
 @over("calculix")
 def test_a_tapped_beam_bolt_over_two_steps(tmp_path, solver):
     """ADR 0090 CCX-15 and CCX-12. The tapped end's slide nodes were held by model-level

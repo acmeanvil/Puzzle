@@ -194,10 +194,19 @@ def test_a_cancel_stops_the_remote_run(tmp_path, fakes):
     case = _case(tmp_path)
     rt = RemoteRuntime(remote_fakes.host(bin_dir, keep_case=True), "calculix")
     stop = threading.Event()
-    threading.Timer(1.5, stop.set).start()
+    started = home / rt.remote_dir(case) / "solver.pid"
+
+    def once_started():  # not after a fixed wait: a cancel before the driver has started
+        for _ in range(600):  # finds nothing there to stop (a slow machine's 1.5 s)
+            if started.exists() and started.read_text(encoding="utf-8").strip():
+                break
+            time.sleep(0.05)
+        stop.set()
+
+    threading.Thread(target=once_started, daemon=True).start()
     job = run_job(["sh", "-c", "echo $$ > solver.pid; sleep 60"], case, rt, cancel=stop)
     assert job.cancelled
-    pid = int((home / rt.remote_dir(case) / "solver.pid").read_text(encoding="utf-8"))
+    pid = int(started.read_text(encoding="utf-8"))
     time.sleep(0.5)
     import os
 
