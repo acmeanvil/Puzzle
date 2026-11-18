@@ -65,6 +65,20 @@ def replace(src: Path, dst: Path) -> None:
             time.sleep(0.025)
 
 
+def _unlink(path: Path) -> None:
+    """Remove a file, retried while Windows refuses because a reader has it open. A
+    client waiting for the lock reads it to see who holds it: a release that met that
+    read failed and left the lock naming a live process, so the waiter timed out."""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                raise
+            time.sleep(0.025)
+
+
 def write_bytes(path: Path, data: bytes, *, durable: bool = True) -> None:
     """Write `path` whole or not at all."""
     tmp = write_temp(path, data, durable=durable)
@@ -329,7 +343,7 @@ class Lock:
             return
         try:
             if self.held():
-                self.path.unlink(missing_ok=True)
+                _unlink(self.path)
         finally:
             self.token = None
 

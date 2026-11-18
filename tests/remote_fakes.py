@@ -133,7 +133,7 @@ jobs="$FAKE_REMOTE_HOME/.fake-jobs"
 echo "$(basename "$0") $1" >> "$jobs/cancels"
 touch "$jobs/$1.cancelled"
 pid=$(cat "$jobs/$1.pid" 2>/dev/null)
-[ -n "$pid" ] && kill -TERM -- "-$pid" 2>/dev/null
+[ -n "$pid" ] && kill -s TERM -- "-$pid" 2>/dev/null
 exit 0
 """
 

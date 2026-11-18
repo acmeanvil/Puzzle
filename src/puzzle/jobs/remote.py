@@ -162,7 +162,9 @@ class RemoteRuntime(Runtime):
         if stop:
             parts.append(f'[ -f {JOB_ID} ] && {stop} "$(cat {JOB_ID})"')
         # The driver's whole process group, so the solver and its children stop too.
-        parts.append('[ -s puzzle-run.pgid ] && kill -TERM -- "-$(cat puzzle-run.pgid)" '
+        # `-s TERM`: dash (Debian's and Ubuntu's sh) reads the `--` after `-TERM` as a
+        # pid and stops nothing, which left the solver running there.
+        parts.append('[ -s puzzle-run.pgid ] && kill -s TERM -- "-$(cat puzzle-run.pgid)" '
                      '2>/dev/null; [ -f puzzle-run.pid ] && kill -TERM "$(cat puzzle-run.pid)" '
                      "2>/dev/null")  # fmt: skip
         with contextlib.suppress(PuzzleError):  # unreachable: the local ssh stops anyway

@@ -727,3 +727,21 @@ def test_new_codes_are_listed():
     for code in ("lock_lost", "write_failed", "newer_schema", "unknown_field", "group_cycle",
                  "damaged_history"):  # fmt: skip
         assert code in CODES
+
+
+def test_a_release_waits_out_a_reader_of_the_lock_file(tmp_path):
+    """On Windows a file open for reading can't be removed: a waiting client reads the
+    lock file to see who holds it, and a release that met that read used to fail and
+    leave the lock naming a live process (the waiter then timed out as busy)."""
+    from puzzle.project.atomic import Lock
+
+    lock = Lock(tmp_path / "x.lock")
+    lock.acquire()
+    reader = open(lock.path, encoding="utf-8")  # noqa: SIM115 - held open across the release
+    threading.Timer(0.2, reader.close).start()
+    try:
+        lock.release()
+    finally:
+        reader.close()
+    assert not lock.path.exists()
+    Lock(tmp_path / "x.lock").hold(timeout=1).__enter__()  # free for the next client
