@@ -113,6 +113,18 @@ def entries(root: Path) -> list[dict[str, Any]]:
     return read(root)[0]
 
 
+def newest_first(root: Path):
+    """The entries from the newest back, each a copy, read lazily from the cached
+    read: a caller that wants only the latest few stops early (BE-11)."""
+    path = Path(root) / HISTORY
+    try:
+        got = _scan(path)
+    except FileNotFoundError:
+        return
+    for e in reversed(got.entries):
+        yield dict(e)
+
+
 def last_seq(root: Path) -> int:
     """The latest entry's seq, read from the file's end (the history only grows)."""
     path = Path(root) / HISTORY

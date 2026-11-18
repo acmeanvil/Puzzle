@@ -158,6 +158,11 @@ class Session:
         self.root = root
         self._lock: atomic.Lock | None = None
         self._swept = False
+        # BE-11: the project's files as this session last read or wrote them (a disk
+        # stamp and each object's hash), so a change reads the project again only when
+        # another client wrote; and the snapshot taken under the lock held now.
+        self._synced: tuple[tuple, dict[str, str]] | None = None
+        self._held: dict[str, dict[str, Any]] | None = None
         self.project = load_project(root)
         self._opened_checked = False  # ADR 0059: one "opened" version check per session
         if store.pending(root):  # a change a crash cut short: finish it now
@@ -318,7 +323,7 @@ class Session:
             if "propose" in decisions:
                 return self._propose(cmds, actor, rationale)
             self._check_opened(actor)
-            before = _snapshot(self.project)
+            before = self._before()
             trial = copy.deepcopy(self.project)
             results = []
             for i, cmd in enumerate(cmds):
@@ -963,7 +968,7 @@ class Session:
         if isinstance(cmd, SetAutonomy):
             return self._set_autonomy(cmd, actor)
         self._check_opened(actor)
-        before = _snapshot(self.project)
+        before = self._before()
         data = _execute(self.project, cmd)
         extra: dict[str, Any] = {"result": data} if data else {}
         if approved_by:
@@ -1005,6 +1010,8 @@ class Session:
             gone=[(before[i]["kind"], i) for i in deleted],
             staged=staged,
         )
+        if staged is None:
+            self._written(after, created + changed)
         return Outcome(
             "applied",
             seq=seqs[0],
@@ -1020,6 +1027,7 @@ class Session:
         """Write the project's changed files with `entries` in one transaction, under the
         lock this session still holds. A project read at an older schema keeps a
         version of its old files first, then is written whole at the new one."""
+        self._synced = None  # set again by `_written` when it knows the files
         if self.project.migrated_from is not None:
             from puzzle.project import versions
 
@@ -1036,6 +1044,44 @@ class Session:
                             check=self._check_lock, staged=staged)  # fmt: skip
         self.project.migrated_from = None
         return seqs
+
+    def _before(self) -> dict[str, dict[str, Any]]:
+        """The project's snapshot before a change: the one taken under this lock when
+        the project was kept, else taken now."""
+        held, self._held = self._held, None  # good for one change: the one about to be
+        return held if held is not None else _snapshot(self.project)
+
+    def _written(self, after: dict[str, dict[str, Any]], ids: list[str]) -> None:
+        """After this session wrote a change: the objects written put back as their
+        files read (so the project kept equals one read afresh), and the disk as it is
+        now remembered, so the next change needn't read the project again (BE-11)."""
+        try:
+            store.reread(self.project, self.root, [UUID(i) for i in ids])
+        except (OSError, PuzzleError):
+            return  # read again under the next lock
+        hashes = {i: e["hash"] for i, e in after.items()}
+        if ids:
+            hashes.update({i: e["hash"] for i, e in
+                           _snapshot(self.project, [UUID(i) for i in ids]).items()})  # fmt: skip
+        self._synced = (store.disk_stamp(self.root), hashes)
+
+    def _sync(self) -> None:
+        """Under the lock: the project as it is on disk. Kept when no project file was
+        written since this session's own change and nothing in memory differs from
+        it; read again otherwise (another client may have changed it)."""
+        self._held = None
+        synced, self._synced = self._synced, None
+        if synced is not None and self.project.migrated_from is None:
+            stamp = store.disk_stamp(self.root)
+            if stamp == synced[0]:
+                snap = _snapshot(self.project)
+                if {i: e["hash"] for i, e in snap.items()} == synced[1]:
+                    from puzzle import trust
+
+                    self.project.trusted = trust.is_trusted(self.root)
+                    self._held, self._synced = snap, synced
+                    return
+        self.project = load_project(self.root)
 
     def _check_lock(self) -> None:
         if self._lock is None:
@@ -1189,7 +1235,7 @@ class Session:
 
         if workdir is None:
             stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-            workdir = self.root / WORK_DIR / f"{slug(study.name)}-{stamp}"
+            workdir = fresh_folder(self.root / WORK_DIR / f"{slug(study.name)}-{stamp}")
         on = cmd.host or (study.remote.host if study.remote is not None else None)
         context = pending.RunContext(self.root, str(study.id), workdir, on)
         with pending.running(context, attach):
@@ -1259,10 +1305,11 @@ class Session:
             if not self._swept:  # temporary files a crash left before committing
                 self._swept = True
                 store.sweep(self.root)
-            self.project = load_project(self.root)  # another client may have changed it
+            self._sync()  # another client may have changed it
             yield
         finally:
             self._lock = None
+            self._held = None
             lock.release()
 
 
@@ -1489,9 +1536,14 @@ def _apply_op(data: dict[str, Any], op: EditOp, where: str) -> None:
 # --- snapshots and history helpers ----------------------------------------------
 
 
-def _snapshot(project: Project) -> dict[str, dict[str, Any]]:
+def _snapshot(project: Project, ids=None) -> dict[str, dict[str, Any]]:
     out = {}
-    for obj in project.objects.values():
+    objs = (
+        project.objects.values()
+        if ids is None
+        else (project.objects[i] for i in ids if i in project.objects)
+    )
+    for obj in objs:
         data = obj.model_dump(mode="json")
         text = json.dumps(data, sort_keys=True)
         out[str(obj.id)] = {
@@ -1557,6 +1609,20 @@ def _in_effect(entries: dict[int, dict[str, Any]]) -> set[int]:
 
 def _dump(cmd: _Command) -> dict[str, Any]:
     return cmd.model_dump(mode="json", exclude_none=True)
+
+
+def fresh_folder(base: Path) -> Path:
+    """A run folder made now and nobody else's (BE-20: two runs started in one second,
+    the GUI's and an agent's, wrote into one folder): `base`, else `base-2`, `-3`..."""
+    base.parent.mkdir(parents=True, exist_ok=True)
+    for n in range(1, 10_000):
+        folder = base if n == 1 else base.with_name(f"{base.name}-{n}")
+        try:
+            folder.mkdir()
+        except FileExistsError:
+            continue
+        return folder
+    raise PuzzleError(f"no free run folder beside {base}", code="write_failed")
 
 
 def slug(name: str) -> str:

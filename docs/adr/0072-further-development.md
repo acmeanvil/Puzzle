@@ -622,6 +622,11 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   columns (0008).
 - Archives: older formats kept in `tests/data/archives`; export taking the session's lock
   and making an "archived" version first (0061).
+- Speed left by ADR 0090 package 14: the fields table partitioned by run alone so
+  compaction can merge (format 3, a migration); the history's undo data as references to
+  version blobs; `read_results` and a run's summary read by field; `problems()`'s
+  operator evaluation off the GUI thread; folders of their own for convergence, adapt
+  and optimise runs started at once (`WORK_DIR/convergence/<id>`).
 
 ### Found while collecting (fix soon, not deferrals)
 

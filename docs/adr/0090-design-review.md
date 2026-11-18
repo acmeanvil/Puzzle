@@ -855,6 +855,52 @@ studies, ten chains of number → result summary → check, a formula).
   the edit on a node. Without a test of their own: removing a field's use, the redraw
   put off while a wire is dragged, arrow keys along wires, Shift+F.
 
+**Package 14 built (2026-11-18):** Speed and scale. Tests in
+`tests/test_speed_commands.py`, `test_speed_store.py`, `test_speed_transfers.py` and
+`test_gui_speed.py`.
+
+- Done when, an edit in a 300-object project under 50 ms: at 295 objects (the cantilever
+  and 72 chains of four operators) the median edit through `Session.submit` fell from
+  183 ms to 46 ms on the maintainer's machine. The test, at 303 objects, holds 150 ms
+  (CI's machines are slower), no project load while nobody else wrote, only the edited
+  object's file replaced, and the kept project equal to one read afresh.
+- Done when, a 1 GB result stores without doubling memory: 998 MB of values stored in
+  2.6 s with 73 MB of extra memory, by hand; the old writer took 1378 MB extra for
+  192 MB (7.2 times). The test stores 19 MB and 192 MB in fresh processes and holds the
+  extra memory's growth under a quarter of the values added (0.08 measured; Windows and
+  Linux, skipped on macOS).
+- BE-11: a session keeps its project between its own changes and reads it again only
+  when a project file's size, times or inode changed or the project in memory no longer
+  hashes as written (`Session._sync`, `store.disk_stamp`); object files are parsed once
+  per stat (`store._parsed`), this process's writes dropping their entries; the lock is
+  checked by its stat; versions and the history are read from their newest end;
+  `problems()` indexes operator readers once and parameter values are kept by content.
+  Left: the history's undo data is whole before-dumps.
+- BE-18: a run's fields are written by pyarrow, a Parquet file per partition a row at a
+  time, then added in one Delta commit (`ResultStore._write_fields`), without
+  dictionaries; the data and format 2 are unchanged. A cache hit gives a `StudyRun` that
+  reads its mesh and results when first used, and a sweep lets go of each stored
+  point's arrays. Left: `read_results` reads a whole run.
+- BE-12, in part: tables and the runs index are kept by the latest Delta log commit and
+  reads open only their run's and field's partition files: at 120 runs `read_field`
+  1151 → 14 ms, `get_run` 56 → 0.6 ms, `field_catalog` 371 → 13 ms. Left: compaction
+  can't merge across the `(run_id, field)` partitions (604 files for 120 runs);
+  partitioning by run alone is a format 3 with a migration, the maintainer's to decide.
+- BE-17: transfers and `FaceLookup` as arrays, the same answers bit for bit (interpolate
+  4.1 → 1.1 s, nearest 3.7 → 0.14 s, the look-up 1.9 → 0.34 s at 64k nodes); points
+  exactly equally near now take the lowest index.
+- BE-20: a run folder is made exclusively, a second in the same second `-2`. BE-21: a
+  local job's stored environment holds no keys, tokens or passwords
+  (`service.without_secrets`).
+- PANEL-13: the result-tool, export, mesh shoot-out and error-estimate forms read
+  names and sizes only (`ResultStore.outline`, `group_dims`, `bounds`). PANEL-26: the
+  fatigue form works its answer out on a worker. GUI-7, 8 were package 10's.
+- From package 13: Properties' Shows row is worked out on a worker. Left: the first
+  `problems()` after an edit still evaluates before-solving operators on the GUI thread.
+- Accepted: a stat-keyed cache can miss another process's write of the same size within
+  one clock tick (as `files.py` already does); delta-rs's writer is bypassed for fields,
+  to recheck on a deltalake upgrade.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

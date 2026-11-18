@@ -190,7 +190,7 @@ def error_estimate(window, study_id=None, definition=None):
 
         try:
             record = run_for(project, window._store(), _U(v.get("source") or studies[0][1]))
-            step = window._store().read_results(record.run_id).steps[-1]
+            step = window._store().outline(record.run_id).steps[-1]  # names (PANEL-26)
         except Exception:  # noqa: BLE001 - no run yet: the physics' own only
             return FIELDS
         own = ("displacement", "temperature")

@@ -18,11 +18,11 @@ UNITS = [("SI (m, Pa, ...)", "si"), ("The display units", "display")]
 
 
 def _steps(window, source_id: str | None) -> list:
-    from puzzle.gui.result_tools import _run_of
+    from puzzle.gui.result_tools import _outline_of
 
     if not source_id:
         return [("Last", -1)]
-    _, results = _run_of(window, source_id)
+    _, results, _ = _outline_of(window, source_id)
     steps = [(s.label(), i) for i, s in enumerate(results.steps)]
     return [("Last", -1)] + steps if len(steps) > 1 else [("Last", -1)]
 

@@ -52,3 +52,7 @@ The maintainer chose "data and a life tool" for this round. The life tool is the
 ## Amended (2026-11-17, ADR 0090 package 9)
 
 Shigley's endurance-limit estimate applies to steels only; another material needs an S-N curve or a measured endurance limit, else the fatigue tool refuses.
+
+## Amended (2026-11-18, ADR 0090 package 14)
+
+The fatigue form checks its input at once and works the answer out on a worker a quarter of a second after typing stops, dropping an answer for an older state of the form.

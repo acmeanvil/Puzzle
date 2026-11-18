@@ -529,6 +529,13 @@ class FatigueDialog(QDialog):
             "duty); damage is at the design life; the safety factor scales every stress."
         )
         self.status = form.message  # what blocks OK, or the result's summary
+        from PySide6.QtCore import QTimer
+
+        self._asked: ResultDefinition | None = None  # the evaluation the form wants now
+        self._generation = 0
+        self._working: set = set()
+        self._later = QTimer(self, singleShot=True, interval=250)
+        self._later.timeout.connect(self._evaluate)
         layout.addWidget(form, 1)
         n = len(project.of_type(ResultDefinition)) + 1
 
@@ -878,17 +885,65 @@ class FatigueDialog(QDialog):
         self.notch_info.setVisible(neuber)
         ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
         ok.setEnabled(False)
+        self._generation += 1  # whatever is being worked out is for the form as it was
+        self._asked = None
+        self._later.stop()
         if not self.runs.studies:
             self.form.set_message("No study has been run yet: run one first.", error=True)
             return
         try:
             d = ResultDefinition.model_validate(self.data())
-            result = derived.evaluate(self.project, self.store, d)
         except PuzzleError as exc:
             self.form.set_message(str(exc), error=True)
             return
         except ValueError as exc:
             self.form.set_message(_first_error(exc), error=True)
+            return
+        # PANEL-26: the evaluation (every node's life, from the stored run) runs on a
+        # worker, once typing pauses; only the latest one asked for is shown.
+        self._asked = d
+        self.form.set_message("Working out lives and safety factors…")
+        self._later.start()
+
+    def _evaluate(self) -> None:
+        from puzzle.gui.tasks import Task, start
+
+        d, self._generation = self._asked, self._generation + 1
+        if d is None:
+            return
+        made = self._generation
+        project, store = self.project, self.store
+        task = Task(lambda _emit: derived.evaluate(project, store, d))
+        task.signals.done.connect(lambda result: self._evaluated(made, result))
+        task.signals.failed.connect(lambda exc: self._evaluated(made, None, exc))
+        self._working.add(task)
+        task.signals.done.connect(lambda _r: self._working.discard(task))
+        task.signals.failed.connect(lambda _e: self._working.discard(task))
+        start(task)
+
+    def wait(self, timeout_s: float = 30.0) -> None:
+        """Until the evaluation asked for is shown (tests; the form never blocks)."""
+        import time
+
+        from PySide6.QtWidgets import QApplication
+
+        if self._later.isActive():
+            self._later.stop()
+            self._evaluate()
+        end = time.monotonic() + timeout_s
+        while self._working and time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.005)
+        QApplication.processEvents()
+
+    def _evaluated(self, made: int, result, exc=None) -> None:
+        if made != self._generation:
+            return  # an older one: the form changed since
+        ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if exc is not None:
+            text = str(exc) if isinstance(exc, PuzzleError) else f"it can't be worked out: {exc}"
+            self.form.set_message(text, error=True)
+            ok.setEnabled(False)
             return
         f = result.results.steps[0].fields
         life = f["fatigue_life"].values[:, 0]

@@ -125,15 +125,47 @@ def check_manifest(data: dict, name: str = "") -> dict:
     return data
 
 
+_MANIFESTS: dict[str, tuple[tuple, bytes]] = {}  # path -> (stat, pickled)
+
+
+def _manifests(root: Path) -> list[tuple[int, Path, os.stat_result]]:
+    """Each manifest's number, path and stat, from one listing."""
+    try:
+        entries = os.scandir(folder(root))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    with entries:
+        found = []
+        for e in entries:
+            stem = e.name[:-5] if e.name.endswith(".json") else ""
+            if stem.isdigit() and e.is_file():
+                try:
+                    found.append((int(stem), Path(e.path), e.stat()))
+                except FileNotFoundError:
+                    continue
+    return sorted(found, key=lambda f: f[0])
+
+
+def _read_manifest(path: Path, st: os.stat_result) -> Version:
+    """A manifest, parsed and checked once while its file is unchanged (BE-11: every
+    change asked for the latest version, which read every manifest)."""
+    import pickle
+
+    stamp = (st.st_size, st.st_mtime_ns, st.st_ctime_ns, 0 if os.name == "nt" else st.st_ino)
+    hit = _MANIFESTS.get(str(path))
+    if hit is not None and hit[0] == stamp:
+        return Version(**pickle.loads(hit[1]))
+    data = check_manifest(json.loads(path.read_text(encoding="utf-8")), path.name)
+    if len(_MANIFESTS) > 5000:
+        _MANIFESTS.clear()
+    _MANIFESTS[str(path)] = (stamp, pickle.dumps(data))
+    return Version(**data)
+
+
 def versions(root: Path) -> list[Version]:
     """Every version, oldest first."""
-    out = []
-    for path in folder(root).glob("*.json"):
-        if path.stem.isdigit():
-            out.append(
-                Version(**check_manifest(json.loads(path.read_text(encoding="utf-8")), path.name))
-            )
-    return sorted(out, key=lambda v: v.number)
+    found = [_read_manifest(path, st) for _, path, st in _manifests(root)]
+    return sorted(found, key=lambda v: v.number)
 
 
 def get(root: Path, number: int | str) -> Version:
@@ -220,8 +252,8 @@ def select(
 
 
 def latest(root: Path) -> Version | None:
-    found = versions(root)
-    return found[-1] if found else None
+    found = _manifests(root)
+    return _read_manifest(found[-1][1], found[-1][2]) if found else None
 
 
 # --- the project's files -------------------------------------------------------------
@@ -358,6 +390,7 @@ def _write(root: Path, v: Version) -> None:
 
     atomic.write_text(folder(root) / f"{v.number}.json", json.dumps(asdict(v), indent=1),
                       encoding="utf-8", durable=False)  # fmt: skip
+    _MANIFESTS.pop(str(folder(root) / f"{v.number}.json"), None)  # read again, whatever its times
 
 
 def mark(root: Path, number: int, good: bool, reason: str = "") -> Version:
@@ -669,20 +702,20 @@ def names(project) -> dict[str, str]:
 
 def due(root: Path, every_edits: int, every_minutes: float) -> tuple[bool, int]:
     """Whether an "edits" version is due: commands since the latest version, and time."""
+    from puzzle.project import history
+
     v = latest(root)
-    path = Path(root) / HISTORY
-    seqs = []
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get("type") == "command" and not str(
-                (e.get("command") or {}).get("command", "")
-            ).startswith("run_"):  # runs (a study, an optimisation, ...) are not edits
-                seqs.append(e.get("seq", 0))
-    since = [s for s in seqs if v is None or s > v.history_seq]
+    since = []
+    # The history's cached read (it parses only lines added since), newest first, back
+    # to the latest version: an edit no longer parses the whole file (BE-11).
+    for e in history.newest_first(root):
+        seq = e.get("seq", 0)
+        if v is not None and seq <= v.history_seq:
+            break
+        if e.get("type") == "command" and not str(
+            (e.get("command") or {}).get("command", "")
+        ).startswith("run_"):  # runs (a study, an optimisation, ...) are not edits
+            since.append(seq)
     if not since:
         return False, 0
     if len(since) >= every_edits:

@@ -30,8 +30,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import pickle
 import secrets
+import threading
 import tomllib
+from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -278,8 +282,10 @@ def _finish(root: Path, journal: dict[str, Any]) -> None:
         if tmp.exists():
             (root / rel).parent.mkdir(parents=True, exist_ok=True)
             atomic.replace(tmp, root / rel)
+        _forget(root / rel)  # read again: a clock coarser than two writes can't tell
     for rel in journal.get("removes", []):
         (root / rel).unlink(missing_ok=True)
+        _forget(root / rel)
     (root / JOURNAL).unlink(missing_ok=True)
 
 
@@ -394,14 +400,105 @@ def load_staged(root: Path, staged: Staged) -> Project:
     return _load(Path(root), staged.moved(), set(staged.removes))
 
 
+# Parsed object files, by path, while their size and times hold (BE-11): parsing TOML
+# was most of a load, and a session loads the project on every change. Each file's
+# contents are kept pickled, so every load gets objects of its own to change.
+_PARSED: OrderedDict[str, tuple[tuple[int, int, int, int], bytes]] = OrderedDict()
+_PARSED_MAX = 20_000  # files; a few kB each pickled
+_parsed_lock = threading.Lock()
+
+
+def _stamp(st: os.stat_result) -> tuple[int, int, int, int]:
+    # Size, modification and change (Windows: creation) times and the inode (POSIX;
+    # 0 on Windows, whose times are precise): an atomic replace makes a new file. A
+    # clock coarser than two writes (Linux file times move by the jiffy) can still
+    # give one stamp twice, so this process's own writes drop their entries too.
+    return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, 0 if os.name == "nt" else st.st_ino)
+
+
+def _forget(path: Path) -> None:
+    with _parsed_lock:
+        _PARSED.pop(str(path), None)
+
+
+def _parsed(path: Path, st: os.stat_result | None = None) -> dict:
+    """A project file's contents, from the cache while the file is unchanged."""
+    if st is None:
+        st = path.stat()
+    key, stamp = str(path), _stamp(st)
+    with _parsed_lock:
+        hit = _PARSED.get(key)
+        if hit is not None and hit[0] == stamp:
+            _PARSED.move_to_end(key)
+            blob = hit[1]
+        else:
+            blob = None
+    if blob is not None:
+        return pickle.loads(blob)
+    data = _toml(path)
+    with _parsed_lock:
+        _PARSED[key] = (stamp, pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL))
+        while len(_PARSED) > _PARSED_MAX:
+            _PARSED.popitem(last=False)
+    return data
+
+
+def _object_files(folder: Path) -> dict[str, os.stat_result]:
+    """The .toml files in an object folder with their stat (free from the listing on
+    Windows)."""
+    try:
+        entries = os.scandir(folder)
+    except (FileNotFoundError, NotADirectoryError):
+        return {}
+    out = {}
+    with entries:
+        for e in entries:
+            if e.name.endswith(".toml") and e.is_file():
+                try:
+                    out[e.name] = e.stat()
+                except FileNotFoundError:  # removed while listing
+                    continue
+    return out
+
+
+def disk_stamp(root: Path) -> tuple:
+    """Every project file's name, size and times: equal stamps mean no project file
+    was written in between (a session keeps its project across changes then)."""
+    root = Path(root)
+    out: list = []
+    try:
+        out.append((PROJECT_FILE, _stamp((root / PROJECT_FILE).stat())))
+    except FileNotFoundError:
+        out.append((PROJECT_FILE, None))
+    out.append((JOURNAL, (root / JOURNAL).exists()))
+    for kind in _BY_KIND:
+        listed = _object_files(root / kind)
+        out += sorted((f"{kind}/{name}", _stamp(st)) for name, st in listed.items())
+    return tuple(out)
+
+
+def reread(project: Project, root: Path, ids: Iterable[Any]) -> None:
+    """Put the objects `ids` back as their files now read (just written): what a load
+    would give, so a project kept in memory never differs from one read afresh."""
+    root = Path(root)
+    for oid in ids:
+        obj = project.objects.get(oid)
+        if obj is None:
+            continue
+        path = root / object_path(obj.kind, obj.id)
+        project.objects[oid] = _validate(type(obj), _parsed(path), path)
+
+
 def _load(root: Path, moved: dict[str, Path], removed: set[str]) -> Project:
     from puzzle.project import migrations
+
+    stats: dict[str, os.stat_result] = {}
 
     def read(rel: str) -> dict:
         path = root / rel
         if rel in moved:
             return _toml(path, moved[rel].read_text(encoding="utf-8-sig"))
-        return _toml(path)
+        return _parsed(path, stats.get(rel))
 
     header = read(PROJECT_FILE)
     found = header.get("schema_version", 1)
@@ -422,7 +519,9 @@ def _load(root: Path, moved: dict[str, Path], removed: set[str]) -> Project:
                           path=str(root / PROJECT_FILE))  # fmt: skip
     raws: list[dict[str, Any]] = []
     for kind in _BY_KIND:
-        rels = {f"{kind}/{p.name}" for p in (root / kind).glob("*.toml")}
+        listed = _object_files(root / kind)
+        stats.update({f"{kind}/{name}": st for name, st in listed.items()})
+        rels = {f"{kind}/{name}" for name in listed}
         rels |= {rel for rel in moved if rel.startswith(f"{kind}/")}
         for rel in sorted(rels - removed):
             raws.append({"kind": kind, "data": read(rel), "path": root / rel})

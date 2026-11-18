@@ -136,3 +136,7 @@ Redo: `Session.redo` takes back the latest undo made since the last fresh change
 ## Amended (2026-11-18, ADR 0090 package 12)
 
 A turn is an undo unit: an agent's changes carry `actor.turn`, and `Session.undo_turn` takes them back newest first as one history entry (`undoes_turn`), which Redo puts back; refused when the objects changed since or the turn restored a version. A proposal is accepted whole or in part, per command (`accept(only=)`), from a card showing each value old → new. After an agent reads text from outside Puzzle in a turn (a solver's log, a field file, an attachment), its changes for the rest of that turn are proposals whatever the level (`Actor.cautious`, the built-in agent only). The built-in agent sends a core of tools and loads groups as it needs them; outside MCP clients get every tool, with read-only and destructive hints. No tool is reachable below its level by loading a group.
+
+## Amended (2026-11-18, ADR 0090 package 14)
+
+A session keeps its project between its own changes and reads it again under the lock only when another client wrote (the files' sizes, times or inodes changed) or what it holds no longer hashes as written. A run's folder is made exclusively, so two runs started in one second get one each.

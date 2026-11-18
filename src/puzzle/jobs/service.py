@@ -10,6 +10,7 @@ and `pending` keeps what is needed to pick it up again.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import shutil
 import sys
@@ -112,9 +113,23 @@ class LocalService(Service):
         from puzzle.jobs.runtime import thread_count
 
         argv = self.runtime.wrap(command, workdir)
-        env = self.runtime.environment(argv) or dict(os.environ)
+        env = without_secrets(self.runtime.environment(argv) or dict(os.environ))
         return {"dir": str(Path(workdir).resolve()), "argv": argv, "env": env,
                 "resources": {"processes": 1, "threads": thread_count()}}  # fmt: skip
+
+
+SECRET = re.compile(r"(_KEY|_TOKEN|_PAT)$|SECRET|PASSWORD|PASSWD|CREDENTIAL|^AWS_SESSION",
+                    re.IGNORECASE)  # fmt: skip
+
+
+def without_secrets(env: dict[str, str]) -> dict[str, str]:
+    """A job's environment without keys, tokens and passwords (BE-21): the runner keeps
+    a job's spec on disk, and a solver needs none of them. Each provider's key variable
+    goes too, whatever its name (ADR 0084)."""
+    from puzzle.agent.catalog import PROVIDERS
+
+    named = {p.key_env.upper() for p in PROVIDERS.values() if p.key_env}
+    return {k: v for k, v in env.items() if not SECRET.search(k) and k.upper() not in named}
 
 
 def remote_command(host, digest: str, base: str = "~/.puzzle-runner") -> str:

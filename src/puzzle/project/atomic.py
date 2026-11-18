@@ -260,6 +260,7 @@ class Lock:
         self.heartbeat_s = heartbeat_s
         self.token: str | None = None
         self._stop: threading.Event | None = None
+        self._seen: tuple | None = None  # our file's stat when it last named our token
 
     def holder(self) -> dict | None:
         """Who holds it, as the file says: {pid, host, token, time}; None when free.
@@ -319,10 +320,27 @@ class Lock:
     def _write(self, token: str) -> None:
         data = {"pid": os.getpid(), "host": HOST, "token": token, "time": time.time()}
         write_text(self.path, json.dumps(data), encoding="utf-8", durable=False)
+        self._seen = self._stat()
+
+    def _stat(self) -> tuple | None:
+        try:
+            st = self.path.stat()
+        except OSError:
+            return None
+        return (st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
     def held(self) -> bool:
-        """Whether the file still names our token."""
-        return self.token is not None and (self.holder() or {}).get("token") == self.token
+        """Whether the file still names our token. Read only when the file changed since
+        it last did (BE-11: reading it was a few ms of every change on Windows): another
+        client's lock is a new file (written whole and replaced), so its times differ."""
+        if self.token is None:
+            return False
+        now = self._stat()
+        if now is not None and now == self._seen:
+            return True
+        ours = (self.holder() or {}).get("token") == self.token
+        self._seen = now if ours else None
+        return ours
 
     def check(self) -> None:
         """Raise `lock_lost` when another client took the lock from us: before writing,
@@ -346,6 +364,7 @@ class Lock:
                 _unlink(self.path)
         finally:
             self.token = None
+            self._seen = None
 
     def _start_heartbeat(self) -> None:
         stop = threading.Event()
@@ -356,6 +375,7 @@ class Lock:
             while not stop.wait(every):
                 if (self.holder() or {}).get("token") != token:
                     return
+                self._seen = None  # its times move: read it once more
                 with contextlib.suppress(OSError):
                     os.utime(path)
 

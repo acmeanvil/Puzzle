@@ -36,11 +36,35 @@ class StudyError(PuzzleError, RuntimeError):
     code = "inconsistent"
 
 
+class _Stored:
+    """A run's mesh or results, read from the store when first asked for (BE-18): a
+    cache hit, and every point of a sweep but the last, hold no arrays until used."""
+
+    def __set_name__(self, owner, name: str) -> None:
+        self.name, self.slot = name, "_" + name
+
+    def __get__(self, obj, cls=None):
+        if obj is None:
+            return None  # the dataclass's default
+        value = obj.__dict__.get(self.slot)
+        if value is None and obj.__dict__.get("_store") is not None:
+            store = obj.__dict__["_store"]
+            if self.name == "mesh":
+                value = store.read_mesh(store.get_run(obj.run_id).mesh_id)
+            else:
+                value = store.read_results(obj.run_id)
+            obj.__dict__[self.slot] = value
+        return value
+
+    def __set__(self, obj, value) -> None:
+        obj.__dict__[self.slot] = value
+
+
 @dataclass
 class StudyRun:
-    mesh: Mesh
-    results: Results
-    run_key: str
+    mesh: Mesh = _Stored()  # type: ignore[assignment]
+    results: Results = _Stored()  # type: ignore[assignment]
+    run_key: str = ""
     run_id: str | None = None  # set when the run is in a result store
     cached: bool = False  # True when an identical earlier run was reused
     mesh_result: MeshResult | None = None  # meshing details, for fresh runs
@@ -53,6 +77,20 @@ class StudyRun:
     timings: dict[str, float] = field(default_factory=dict)
     cores: str = ""  # what the solve used: "4 cores", "2 processes x 2 threads"
     events: list = field(default_factory=list)  # progress events (ADR 0054)
+
+    @classmethod
+    def stored(cls, store, run_id: str, run_key: str, **kwargs) -> StudyRun:
+        """A run in the store, its mesh and results read when first used."""
+        run = cls(run_key=run_key, run_id=run_id, **kwargs)
+        run.__dict__["_store"] = store
+        return run
+
+    def release(self, store) -> None:
+        """Let go of the arrays once the run is stored: read again if asked for."""
+        if store is not None and self.run_id is not None:
+            self.__dict__["_store"] = store
+            self.__dict__.pop("_mesh", None)
+            self.__dict__.pop("_results", None)
 
 
 def _cores(adapter) -> str:
@@ -220,14 +258,8 @@ def _study_run(
     run_key = _point[0] if _point else run_hashes(keyed, root)[study.id][study.solver][0]
     if store is not None and reuse:
         hit = store.find_run(run_key)
-        if hit is not None:
-            return StudyRun(
-                mesh=store.read_mesh(hit.mesh_id),
-                results=store.read_results(hit.run_id),
-                run_key=run_key,
-                run_id=hit.run_id,
-                cached=True,
-            )
+        if hit is not None:  # BE-18: read when used, not to say it was cached
+            return StudyRun.stored(store, hit.run_id, run_key, cached=True)
 
     from puzzle import budget
     from puzzle.jobs.runtime import remote_host
@@ -594,6 +626,8 @@ def _sweep_points(
         )
         if sweep.materials_only(study) and run.mesh_result is not None:
             shared_mesh = run.mesh_result
+        if runs:  # BE-18: the points before are stored; read again when asked for
+            runs[-1][1].release(store)
         runs.append((words, run))
     last = runs[-1][1]
     return StudyRun(

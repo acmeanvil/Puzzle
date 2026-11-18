@@ -90,38 +90,35 @@ def _cell_size(points: np.ndarray, per_cell: float = 8.0) -> float:
 
 
 def _nearest(points: np.ndarray, queries: np.ndarray) -> np.ndarray:
-    """Index of the nearest point for each query (grid buckets, growing rings)."""
-    h = _cell_size(points)
-    origin = points.min(axis=0)
-    keys = np.floor((points - origin) / h).astype(np.int64)
-    buckets: dict[tuple[int, int, int], list[int]] = {}
-    for i, k in enumerate(map(tuple, keys)):
-        buckets.setdefault(k, []).append(i)
+    """Index of the nearest point for each query, the lowest index among points
+    equally near (BE-17: a KD-tree, where a Python loop per query took 2 s at 60k)."""
+    from scipy.spatial import cKDTree
+
+    points, queries = np.asarray(points, float), np.asarray(queries, float)
     out = np.empty(len(queries), dtype=np.int64)
-    qkeys = np.floor((queries - origin) / h).astype(np.int64)
-    for qi, (q, k) in enumerate(zip(queries, qkeys, strict=True)):
-        ring = 1
-        while True:
-            near = [
-                i
-                for dx in range(-ring, ring + 1)
-                for dy in range(-ring, ring + 1)
-                for dz in range(-ring, ring + 1)
-                for i in buckets.get((k[0] + dx, k[1] + dy, k[2] + dz), ())
-            ]
-            if near:
-                cand = np.asarray(near)
-                d = np.linalg.norm(points[cand] - q, axis=1)
-                # A point in the next ring could be nearer than one found at the edge.
-                if d.min() <= ring * h:
-                    out[qi] = cand[int(np.argmin(d))]
-                    break
-            ring += 1
+    if not len(queries):
+        return out
+    tree = cKDTree(points)
+    k = min(4, len(points))
+    d, i = tree.query(queries, k=k)
+    d, i = d.reshape(len(queries), k), i.reshape(len(queries), k)
+    out[:] = i[:, 0]
+    tied = np.flatnonzero((d[:, 1:] == d[:, :1]).any(axis=1)) if k > 1 else []
+    for q in tied:  # rare: points exactly as near; all of them, the lowest index
+        near = tree.query_ball_point(queries[q], d[q, 0] * (1 + 1e-15) + 1e-300)
+        exact = [j for j in near if np.linalg.norm(points[j] - queries[q]) == d[q, 0]]
+        out[q] = min(exact) if exact else i[q, 0]
     return out
 
 
-def _interpolate(source: Mesh, values: np.ndarray, queries: np.ndarray) -> np.ndarray:
-    """Linear interpolation in the source tetrahedra's corners; nearest node outside."""
+def _interpolate(source: Mesh, values: np.ndarray, queries: np.ndarray,
+                 chunk: int = 50_000) -> np.ndarray:  # fmt: skip
+    """Linear interpolation in the source tetrahedra's corners; nearest node outside.
+
+    Each tetrahedron goes in every grid cell its bounding box touches, each query
+    looks among its cell's and takes the first (lowest numbered) that holds it: as the
+    loops did, done as arrays (BE-17: 3.2 s at 60k nodes, a Python loop per query and
+    per tetrahedron's cells)."""
     tets = [b for b in source.blocks if b.dim == 3 and b.element.startswith("tet")]
     if not tets:
         return values[_nearest(source.coords, queries)]
@@ -133,41 +130,61 @@ def _interpolate(source: Mesh, values: np.ndarray, queries: np.ndarray) -> np.nd
     corners = np.concatenate([rows(b.connectivity[:, :4]) for b in tets])  # (n, 4) rows
     xyz = source.coords[corners]  # (n, 4, 3)
     lo, hi = xyz.min(axis=1), xyz.max(axis=1)
-    h = _cell_size(source.coords, per_cell=2.0)
+    # Cells about a tetrahedron's size: each in a few, a few in each. Which holds a
+    # query doesn't depend on it (every one holding it is in the query's cell).
+    h = float(np.median((hi - lo).max(axis=1))) or _cell_size(source.coords, per_cell=2.0)
     origin = source.coords.min(axis=0)
-    # Bucket every tetrahedron in each grid cell its bounding box touches.
-    buckets: dict[tuple[int, int, int], list[int]] = {}
     klo = np.floor((lo - origin) / h).astype(np.int64)
     khi = np.floor((hi - origin) / h).astype(np.int64)
-    for t in range(len(corners)):
-        for i in range(klo[t, 0], khi[t, 0] + 1):
-            for j in range(klo[t, 1], khi[t, 1] + 1):
-                for k in range(klo[t, 2], khi[t, 2] + 1):
-                    buckets.setdefault((i, j, k), []).append(t)
+    # Every (tetrahedron, cell) pair, in tetrahedron order, cells as one number.
+    base = klo.min(axis=0)
+    dims = khi.max(axis=0) - base + 1
+    span = khi - klo + 1
+    counts = span.prod(axis=1)
+    tet_of = np.repeat(np.arange(len(corners)), counts)
+    r = np.arange(len(tet_of)) - np.repeat(np.cumsum(counts) - counts, counts)
+    ny, nz = span[tet_of, 1], span[tet_of, 2]
+    cell = klo[tet_of] - base + np.column_stack([r // (ny * nz), (r // nz) % ny, r % nz])
+    key = (cell[:, 0] * dims[1] + cell[:, 1]) * dims[2] + cell[:, 2]
+    by = np.argsort(key, kind="stable")  # within a cell, tetrahedra in their order
+    key, tet_of = key[by], tet_of[by]
+    cells, first, many = np.unique(key, return_index=True, return_counts=True)
     # Barycentric coordinates via the inverse of each tetrahedron's edge matrix.
     edges = np.stack([xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0], xyz[:, 3] - xyz[:, 0]], axis=2)
     inverse = np.linalg.inv(edges)
     out = np.empty((len(queries), values.shape[1]))
-    missing = []
+    found = np.zeros(len(queries), bool)
     tol = 1e-9
-    qkeys = np.floor((queries - origin) / h).astype(np.int64)
-    for qi, (q, key) in enumerate(zip(queries, qkeys, strict=True)):
-        cand = buckets.get(tuple(key))
-        found = False
-        if cand:
-            cand = np.asarray(cand)
-            local = np.einsum("nij,nj->ni", inverse[cand], q - xyz[cand, 0])
-            weights = np.column_stack([1 - local.sum(axis=1), local])
-            inside = np.flatnonzero((weights >= -tol).all(axis=1))
-            if len(inside):
-                t, w = cand[inside[0]], weights[inside[0]]
-                out[qi] = w @ values[corners[t]]
-                found = True
-        if not found:
-            missing.append(qi)
-    if missing:
-        idx = np.asarray(missing)
-        out[idx] = values[_nearest(source.coords, queries[idx])]
+    qcell = np.floor((queries - origin) / h).astype(np.int64) - base
+    inside_grid = ((qcell >= 0) & (qcell < dims)).all(axis=1)
+    qkey = (qcell[:, 0] * dims[1] + qcell[:, 1]) * dims[2] + qcell[:, 2]
+    at = np.searchsorted(cells, qkey)
+    hit = inside_grid & (at < len(cells))
+    hit[hit] = cells[at[hit]] == qkey[hit]
+    asked = np.flatnonzero(hit)
+    pad = 1e-6 * h  # a holding tetrahedron's box holds the query, to within the tolerance
+    for c0 in range(0, len(asked), chunk):
+        q = asked[c0 : c0 + chunk]
+        n = many[at[q]]
+        pair = np.repeat(np.arange(len(q)), n)
+        offset = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
+        cand = tet_of[np.repeat(first[at[q]], n) + offset]
+        point = queries[q][pair]
+        box = ((lo[cand] - pad <= point) & (point <= hi[cand] + pad)).all(axis=1)
+        pair, cand, point = pair[box], cand[box], point[box]
+        local = np.einsum("nij,nj->ni", inverse[cand], point - xyz[cand, 0])
+        weights = np.column_stack([1 - local.sum(axis=1), local])
+        inside = np.flatnonzero((weights >= -tol).all(axis=1))
+        # Pairs run query by query, tetrahedra in their order: the first is the lowest.
+        held, firsts = np.unique(pair[inside], return_index=True)
+        pick = inside[firsts]
+        t, w = cand[pick], weights[pick]
+        took = q[held]
+        out[took] = np.matmul(w[:, None, :], values[corners[t]])[:, 0, :]
+        found[took] = True
+    missing = np.flatnonzero(~found)
+    if len(missing):
+        out[missing] = values[_nearest(source.coords, queries[missing])]
     return out
 
 

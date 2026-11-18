@@ -60,20 +60,28 @@ def current_source(window) -> str | None:
         return None
 
 
-def _run_of(window, source_id: str):
-    """(mesh, results) of a study's newest run."""
+def _outline_of(window, source_id: str):
+    """(groups by name with their dimension, the run's steps and fields without values,
+    mesh id) of a study's newest run: metadata only, so a form's choices cost the
+    same at any model size; a stored run never changes, so the last one read is kept
+    and a form rebuilding its choices on every keystroke reads it once (PANEL-13)."""
     from puzzle.post import derived
 
     store = window._store()
     record = derived.run_for(window.session.project, store, _uuid(source_id))
-    # A stored run never changes: the last one read is kept, so a form's choices,
-    # rebuilt on every keystroke, don't read the whole run again each time (PANEL-13).
     key = (str(store.root), record.run_id)
-    kept = getattr(window, "_run_read", None)
+    kept = getattr(window, "_outline_read", None)
     if kept is None or kept[0] != key:
-        kept = (key, (store.read_mesh(record.mesh_id), store.read_results(record.run_id)))
-        window._run_read = kept
+        kept = (key, (store.group_dims(record.mesh_id), store.outline(record.run_id),
+                      record.mesh_id))  # fmt: skip
+        window._outline_read = kept
     return kept[1]
+
+
+def _bounds_of(window, source_id: str):
+    """The run's mesh's lowest and highest corner (its coordinates only)."""
+    _, _, mid = _outline_of(window, source_id)
+    return window._store().bounds(mid)
 
 
 def selection_choices(window, source_id: str, supports_first: bool = False) -> list:
@@ -81,7 +89,7 @@ def selection_choices(window, source_id: str, supports_first: bool = False) -> l
     named by their feature when asked (reactions)."""
     if not source_id:
         return []
-    mesh, _ = _run_of(window, source_id)
+    groups, _, _ = _outline_of(window, source_id)
     study = window.session.project.objects.get(_uuid(source_id))
     comp = window.session.project.objects.get(study.component) if study else None
     supports = {}
@@ -93,8 +101,8 @@ def selection_choices(window, source_id: str, supports_first: bool = False) -> l
                 if f.type in SUPPORTS:
                     supports.setdefault(f.selection, _feature_label(ph.type, f.type).lower())
     out = []
-    for name, group in mesh.groups.items():
-        text = f"{name} ({KIND_NAMES.get(group.dim, 'entities')})"
+    for name, dim in groups.items():
+        text = f"{name} ({KIND_NAMES.get(dim, 'entities')})"
         if name in supports:
             text = f"{name}: {supports[name]}"
         out.append((text, name))
@@ -108,7 +116,7 @@ def quantity_choices(window, source_id: str) -> list:
         return []
     from puzzle.post.derived import _items_of
 
-    _, results = _run_of(window, source_id)
+    _, results, _ = _outline_of(window, source_id)
     return [(i.label, i.key) for i in _items_of(results) if i.field != "reaction_force"]
 
 
@@ -297,8 +305,7 @@ def _selection_title(window, v) -> str:
 
 def default_path(window, source_id: str) -> tuple[tuple, tuple]:
     """Through the model's centre along its longest side, end to end."""
-    mesh, _ = _run_of(window, source_id)
-    lo, hi = mesh.coords.min(axis=0), mesh.coords.max(axis=0)
+    lo, hi = _bounds_of(window, source_id)
     axis = int(np.argmax(hi - lo))
     start, end = (lo + hi) / 2, (lo + hi) / 2
     start[axis], end[axis] = lo[axis], hi[axis]
@@ -384,8 +391,7 @@ EQUIVALENTS = [
 
 def default_wall(window, source_id: str) -> tuple[tuple, tuple]:
     """Through the model's centre across its thinnest side, surface to surface."""
-    mesh, _ = _run_of(window, source_id)
-    lo, hi = mesh.coords.min(axis=0), mesh.coords.max(axis=0)
+    lo, hi = _bounds_of(window, source_id)
     axis = int(np.argmin(hi - lo))
     start, end = (lo + hi) / 2, (lo + hi) / 2
     start[axis], end[axis] = lo[axis], hi[axis]
@@ -697,11 +703,10 @@ def rows(window, probe: ResultProbe, found: dict) -> dict[str, str]:
 
 def _is_body(window, probe) -> bool:
     try:
-        mesh, _ = _run_of(window, str(probe.source))
+        groups, _, _ = _outline_of(window, str(probe.source))
     except PuzzleError:
         return False
-    group = mesh.groups.get(probe.selection)
-    return group is not None and group.dim == 3
+    return groups.get(probe.selection) == 3
 
 
 def linearized_rows(probe: ResultProbe, found: dict) -> dict[str, str]:

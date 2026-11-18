@@ -8,6 +8,7 @@ Every change is an ordinary command (`Create`, `Edit`), so it is undoable and lo
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from uuid import UUID
 
@@ -133,12 +134,24 @@ def show(window, op) -> None:
     panel.add_inputs(input_rows(window, op))
     from puzzle.operators import evaluate as ev
 
-    try:
-        ctx = ev.Context(window.session.project, window._store(), root=window.session.root)
-        text = ev.detail(ctx, op)
-    except PuzzleError as exc:
-        text = exc.message
-    panel.add_rows("Output", [("Shows", text)])
+    # Worked out on a worker (ADR 0090 package 14, from package 13): an operator that
+    # reads a big run, a file or a script no longer holds the window while it is shown.
+    group = panel.add_rows("Output", [("Shows", "Working it out…")])
+    row = group.child(0)
+    project, root = window.session.project, window.session.root
+
+    def work(_emit) -> str:
+        try:
+            return ev.detail(ev.Context(project, window._store(), root=root), op)
+        except PuzzleError as exc:
+            return exc.message
+
+    def done(text) -> None:
+        with contextlib.suppress(RuntimeError):  # Properties moved on: the row is gone
+            row.setText(1, str(text))
+            row.setToolTip(1, str(text))
+
+    window.background("Working out the operator…", work, done, lock=False, quiet=True)
     from puzzle.operators import operator_doc
 
     doc = operator_doc(op.type)  # ADR 0071: what it is for, always at hand

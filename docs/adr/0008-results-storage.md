@@ -64,3 +64,7 @@ Tried and not used: binary blobs per row (Parquet stored min/max statistics of e
 - Delta catalog plus a VTKHDF file per run for fields: the planned fallback; format 2 matched it on viewing without a second format, repeated meshes or VTK as a write dependency.
 - Native files only: no compression gain, no common query path.
 - HDF5 or ADIOS2 with a custom schema: capable, but no transaction log and a less familiar query story.
+
+## Amended (2026-11-18, ADR 0090 package 14)
+
+A run's fields are written by pyarrow, one Parquet file per `(run_id, field)` partition a row at a time, and added to the Delta table in one commit, so storing a run holds about 100 MB beyond the run itself whatever its size (1 GB of values: 73 MB extra; delta-rs's writer took seven times the values). Dictionary encoding is off. Format 2 and the data are unchanged; older stores read as before. Tables and the runs index are kept by the latest log commit, and reads open only their run's and field's files. `outline(run_id)`, `group_dims` and `bounds` answer from metadata. Compaction can't merge across the partitions; partitioning by run alone would be format 3.

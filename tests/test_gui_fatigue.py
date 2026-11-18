@@ -79,6 +79,7 @@ def test_fatigue_tool_on_the_cantilever(window):
 
     def fill(dialog):
         dialog.table.cellWidget(0, 3).setText(f"{scale:.12g}")
+        dialog.wait()  # worked out on a worker (ADR 0090 package 14, PANEL-26)
         seen["before"] = dialog.status.text()
         return False  # cancelled: the steel lacks its tensile strength
 
@@ -100,6 +101,7 @@ def test_fatigue_tool_on_the_cantilever(window):
         dialog.table.cellWidget(0, 3).setText(f"{scale:.12g}")
         dialog.diameter.setText("10")  # mm: shown only for round sizes
         assert dialog.diameter.isHidden()
+        dialog.wait()
         seen["after"] = dialog.status.text()
         return True
 

@@ -115,6 +115,9 @@ def test_the_palette_makes_a_reduce_wired_from_the_selected_results(window):
     node = w.schematic.items[str(op.id)].node
     assert node.value.endswith(" mm") and node.state == "up_to_date"  # the tip deflection
     assert w.tree.current().object == str(op.id)  # selected, so Properties shows it
+    while w.tasks:  # its value, worked out off the GUI thread too (package 14)
+        QApplication.processEvents()
+        time.sleep(0.02)
     rows = _rows(w)
     assert "Inputs" in rows and rows["Shows"].text(1) == node.value
     assert "Against" not in rows and "Reduction" in rows  # its own settings only

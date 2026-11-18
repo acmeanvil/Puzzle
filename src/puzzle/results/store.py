@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import re
 import threading
 import uuid
@@ -38,7 +39,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
-from deltalake import DeltaTable, WriterProperties, write_deltalake
+from deltalake import ColumnProperties, DeltaTable, WriterProperties, write_deltalake
 
 from puzzle import __version__
 from puzzle.errors import PuzzleError
@@ -130,14 +131,30 @@ SCHEMAS = {
 }
 PARTITIONS = {"nodes": ["mesh_id"], "cells": ["mesh_id"], "fields": ["run_id", "field"]}
 # zstd (ADR 0008): about a fifth smaller than Delta's default Snappy for result stores.
-WRITER = WriterProperties(compression="ZSTD", compression_level=3)
+# No dictionaries (BE-18): a column of distinct floats tried one for every page and
+# fell back, a fifth of the write's time and a quarter more bytes; the values are the
+# same either way.
+PLAIN = ColumnProperties(dictionary_enabled=False)
+WRITER = WriterProperties(compression="ZSTD", compression_level=3,
+                          default_column_properties=PLAIN)  # fmt: skip
 # A row group per fields row (one field at one step): a step's read prunes the others.
-FIELD_WRITER = WriterProperties(compression="ZSTD", compression_level=3, max_row_group_size=1)
+FIELD_WRITER = WriterProperties(compression="ZSTD", compression_level=3, max_row_group_size=1,
+                                default_column_properties=PLAIN)  # fmt: skip
 WRITERS = {"fields": FIELD_WRITER}
 
 
 class StaleStore(PuzzleError):
     code = "stale_store"
+
+
+@dataclass(frozen=True)
+class FieldInfo:
+    """A stored field without its values (`ResultStore.outline`)."""
+
+    name: str
+    location: str
+    components: list[str]
+    count: int
 
 
 @dataclass(frozen=True)
@@ -249,9 +266,8 @@ class ResultStore:
         run_id = uuid.uuid4().hex
         self._check_format(create=True)
         mid = self.write_mesh(mesh)
-        fields = _fields_table(run_id, results)
-        if fields.num_rows:
-            self._append("fields", fields)
+        if any(step.fields for step in results.steps):
+            self._write_fields(run_id, results)
         record = {
             "run_id": run_id,
             "run_key": run_key,
@@ -332,29 +348,49 @@ class ResultStore:
     # --- reading ---------------------------------------------------------------
 
     def runs(self) -> list[RunRecord]:
+        return list(self._runs()[0])
+
+    def _runs(self) -> tuple[list[RunRecord], dict[str, RunRecord], dict[str, RunRecord]]:
+        """The runs in the order recorded, by id, and the latest completed by key: read
+        once per version of the runs table (BE-12: each look-up read and sorted it)."""
         self._check_format()
         if not self._exists("runs"):
-            return []
+            return [], {}, {}
+        stamp = _log_stamp(self.root / "runs")
+        key = str(Path(self.root).resolve())
+        with _cache_lock:
+            hit = _RUNS.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
         rows = self._rows("runs").sort_by([("recorded_at", "ascending")]).to_pylist()
-        return [RunRecord(**r) for r in rows]
+        records = [RunRecord(**r) for r in rows]
+        by_id: dict[str, RunRecord] = {}
+        for r in records:  # the first with an id, as a scan in order found it
+            by_id.setdefault(r.run_id, r)
+        by_key = {r.run_key: r for r in records if r.status == "completed"}
+        got = (records, by_id, by_key)
+        with _cache_lock:
+            _RUNS[key] = (stamp, got)
+            _trim(_RUNS)
+        return got
 
     def find_run(self, run_key: str) -> RunRecord | None:
         """The latest completed run with this key: a cache hit for an unchanged study."""
-        hits = [r for r in self.runs() if r.run_key == run_key and r.status == "completed"]
-        return hits[-1] if hits else None
+        return self._runs()[2].get(run_key)
 
     def get_run(self, run_id: str) -> RunRecord:
-        for r in self.runs():
-            if r.run_id == run_id:
-                return r
-        raise KeyError(f"no run {run_id}")
+        found = self._runs()[1].get(run_id)
+        if found is None:
+            raise KeyError(f"no run {run_id}")
+        return found
 
     def field_catalog(self, run_id: str) -> list[tuple[str, str, list[str]]]:
         """(field, location, components) of a run's stored fields, in step order, read
         from the metadata columns only (no values): what the model tree lists."""
         table = self._rows(
-            "fields", pc.field("run_id") == run_id, ["field", "location", "components", "ordinal"]
-        )
+            "fields", pc.field("run_id") == run_id, ["field", "location", "components", "ordinal"],
+            partitions=[("run_id", "=", run_id)],
+        )  # fmt: skip
         rows = sorted(table.to_pylist(), key=lambda r: r["ordinal"])
         seen: dict[str, tuple[str, str, list[str]]] = {}
         for r in rows:
@@ -363,9 +399,47 @@ class ResultStore:
                 seen[r["field"]] = (r["field"], r["location"], comps)
         return list(seen.values())
 
+    def outline(self, run_id: str) -> Results:
+        """A run's steps and each step's fields as `FieldInfo` (name, location,
+        components, count), from the metadata columns alone: what a form's choices
+        need, without reading a value (PANEL-13). Steps and fields in `read_results`'
+        order."""
+        record = self.get_run(run_id)
+        table = self._rows(
+            "fields", pc.field("run_id") == run_id,
+            ["field", "location", "components", "count", "ordinal", "step", "kind", "value",
+             "mode"], partitions=[("run_id", "=", run_id)])  # fmt: skip
+        steps: dict[int, StepResult] = {}
+        for r in sorted(table.to_pylist(), key=lambda r: (r["ordinal"], r["field"])):
+            if r["ordinal"] not in steps:
+                steps[r["ordinal"]] = StepResult(index=r["step"], kind=r["kind"],
+                                                 value=r["value"], mode=r["mode"])  # fmt: skip
+            steps[r["ordinal"]].fields[r["field"]] = FieldInfo(
+                r["field"], r["location"], r["components"].split(","), r["count"]
+            )
+        return Results(solver=record.solver, steps=[steps[k] for k in sorted(steps)])
+
+    def group_dims(self, mid: str) -> dict[str, int]:
+        """A mesh's groups by name, with their dimension, read without their nodes."""
+        rows = self._rows("groups", pc.field("mesh_id") == mid, ["name", "dim"]).to_pylist()
+        out: dict[str, int] = {}
+        for g in rows:
+            out.setdefault(g["name"], g["dim"])
+        return out
+
+    def bounds(self, mid: str) -> tuple[np.ndarray, np.ndarray]:
+        """A mesh's bounding box (lowest and highest corner), from its coordinates."""
+        nodes = self._rows("nodes", pc.field("mesh_id") == mid, ["coords"],
+                           partitions=[("mesh_id", "=", mid)])  # fmt: skip
+        if not nodes.num_rows:
+            raise KeyError(f"no mesh {mid}")
+        xyz = _array(nodes, "coords", 0).reshape(-1, 3)
+        return xyz.min(axis=0), xyz.max(axis=0)
+
     def read_results(self, run_id: str) -> Results:
         record = self.get_run(run_id)
-        table = self._rows("fields", pc.field("run_id") == run_id)
+        table = self._rows("fields", pc.field("run_id") == run_id,
+                           partitions=[("run_id", "=", run_id)])  # fmt: skip
         results = Results(solver=record.solver)
         steps: dict[int, StepResult] = {}
         ids: dict[tuple[str, int], np.ndarray] = {}  # (field, ordinal) -> ids stored there
@@ -394,30 +468,34 @@ class ResultStore:
         group statistics on `ordinal` to the one step: what a viewer needs for a frame.
         """
         where = (pc.field("run_id") == run_id) & (pc.field("field") == field)
-        index = self._rows("fields", where, columns=["ordinal", "ids_from"]).sort_by("ordinal")
+        # BE-12: one dataset of this run's and field's files (it was every run's, thrice).
+        dataset = self._dataset("fields", [("run_id", "=", run_id), ("field", "=", field)])
+        if dataset is None:
+            raise KeyError(f"run {run_id} has no '{field}' field")
+        index = dataset.to_table(filter=where, columns=["ordinal", "ids_from"]).sort_by("ordinal")
         if not index.num_rows:
             raise KeyError(f"run {run_id} has no '{field}' field")
         at = index.to_pylist()[-1 if step is None else step]
-        table = self._rows("fields", where & (pc.field("ordinal") == at["ordinal"]))
+        table = dataset.to_table(filter=where & (pc.field("ordinal") == at["ordinal"]))
         meta = table.drop_columns(["ids", "values"]).to_pylist()[0]
         if at["ids_from"] == at["ordinal"]:
             ids = _array(table, "ids", 0)
         else:
-            held = self._rows(
-                "fields", where & (pc.field("ordinal") == at["ids_from"]), columns=["ids"]
-            )
+            held = dataset.to_table(filter=where & (pc.field("ordinal") == at["ids_from"]),
+                                    columns=["ids"])  # fmt: skip
             ids = _array(held, "ids", 0)
         return _field(meta, ids, _array(table, "values", 0))
 
     def read_mesh(self, mid: str) -> Mesh:
         self._check_format()
-        nodes = self._rows("nodes", pc.field("mesh_id") == mid)
+        on = [("mesh_id", "=", mid)]
+        nodes = self._rows("nodes", pc.field("mesh_id") == mid, partitions=on)
         if not nodes.num_rows:
             raise KeyError(f"no mesh {mid}")
         mesh = Mesh(
             node_ids=_array(nodes, "node_ids", 0), coords=_array(nodes, "coords", 0).reshape(-1, 3)
         )
-        cells = self._rows("cells", pc.field("mesh_id") == mid).sort_by("block")
+        cells = self._rows("cells", pc.field("mesh_id") == mid, partitions=on).sort_by("block")
         seen: set[int] = set()
         for i, row in enumerate(cells.drop_columns(["element_ids", "connectivity"]).to_pylist()):
             if row["block"] in seen:  # a store an older Puzzle wrote twice (BE-10)
@@ -537,12 +615,105 @@ class ResultStore:
             schema_mode="merge",  # a column added since (runs.point) joins older tables
         )
 
-    def _rows(self, name: str, filter=None, columns: list[str] | None = None) -> pa.Table:
+    def _write_fields(self, run_id: str, results: Results) -> None:
+        """A run's fields, one Parquet file per partition, written a row at a time
+        straight to disk by pyarrow, then added to the table in one commit (BE-18).
+
+        delta-rs's own writer held each partition's file in memory and more: storing
+        192 MB of values took 960 MB besides the results, and 1 GB would have needed
+        5 GB. Here each row (one field at one step) is a view of the results' arrays
+        and its own row group, as before; the files and their rows are those delta-rs
+        wrote (partition columns in the folders, statistics on the scalar columns)."""
+        from deltalake.transaction import AddAction
+
+        path = self.root / "fields"
+        schema = SCHEMAS["fields"]
+        if not self._exists("fields"):
+            DeltaTable.create(str(path), schema=schema, partition_by=PARTITIONS["fields"],
+                              mode="ignore")  # fmt: skip
+        table = DeltaTable(str(path))
+        parts = list(table.metadata().partition_columns)
+        stored = pa.schema([f for f in schema if f.name not in parts])
+        writers: dict[tuple, _PartFile] = {}
+        try:
+            for meta, ids, values in _fields_rows(run_id, results):
+                key = tuple(meta[k] for k in parts)
+                out = writers.get(key)
+                if out is None:
+                    out = writers[key] = _PartFile(path, dict(zip(parts, key, strict=True)),
+                                                   stored)  # fmt: skip
+                out.write(meta, ids, values)
+            actions = [w.close() for w in writers.values()]
+        except BaseException:
+            for w in writers.values():
+                w.discard()
+            raise
+        table.create_write_transaction(
+            [AddAction(**a) for a in actions], mode="append", schema=table.schema(),
+            partition_by=parts,
+        )  # fmt: skip
+
+    def _table(self, name: str) -> DeltaTable:
+        """The table at its latest version, opened once per version (BE-12: each read
+        opened it and read its log again)."""
+        path = self.root / name
+        stamp = _log_stamp(path)
+        key = str(Path(path).resolve())
+        with _cache_lock:
+            hit = _TABLES.get(key)
+            if hit is not None and hit[0] == stamp:
+                return hit[1]
+        table = DeltaTable(str(path))
+        with _cache_lock:
+            _TABLES[key] = (stamp, table)
+            _trim(_TABLES)
+        return table
+
+    def _dataset(self, name: str, partitions=None):
+        """The table as a pyarrow dataset of the partitions given only (a run's or a
+        mesh's files, not every run's); None when there is no table."""
         if not self._exists(name):
-            return SCHEMAS[name].empty_table().select(columns or SCHEMAS[name].names)
+            return None
         self._check_format()
-        dataset = DeltaTable(str(self.root / name)).to_pyarrow_dataset()
+        table = self._table(name)
+        with _cache_lock:  # one caller of a cached DeltaTable at a time
+            if partitions:
+                own = set(table.metadata().partition_columns)
+                partitions = [p for p in partitions if p[0] in own] or None
+            return table.to_pyarrow_dataset(file_pruning_predicate=partitions)
+
+    def _rows(self, name: str, filter=None, columns: list[str] | None = None,
+              partitions=None) -> pa.Table:  # fmt: skip
+        dataset = self._dataset(name, partitions)
+        if dataset is None:
+            return SCHEMAS[name].empty_table().select(columns or SCHEMAS[name].names)
         return dataset.to_table(filter=filter, columns=columns)
+
+
+_cache_lock = threading.RLock()
+_TABLES: dict[str, tuple[tuple, DeltaTable]] = {}  # table folder -> (log stamp, table)
+_RUNS: dict[str, tuple[tuple, tuple]] = {}  # store root -> (runs log stamp, records)
+
+
+def _trim(cache: dict, keep: int = 64) -> None:
+    while len(cache) > keep:  # the oldest opened first
+        cache.pop(next(iter(cache)))
+
+
+def _log_stamp(table: Path) -> tuple:
+    """A table's latest commit, as its log folder lists it: a new commit (any writer,
+    any process), or a store made again from nothing, gives another."""
+    latest, stamp = "", None
+    try:
+        with os.scandir(Path(table) / "_delta_log") as entries:
+            for e in entries:
+                if e.name.endswith(".json") and e.name[:-5].isdigit() and e.name > latest:
+                    latest = e.name
+                    st = e.stat()
+                    stamp = (st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    except FileNotFoundError:
+        return ("", None)
+    return (latest, stamp)
 
 
 def _list(values: np.ndarray) -> pa.Array:
@@ -598,10 +769,9 @@ def _cells_table(mid: str, index: int, b: CellBlock) -> pa.Table:
     )
 
 
-def _fields_table(run_id: str, results: Results) -> pa.Table:
-    """One row per field per result step, in the order Results keeps its steps."""
-    rows: dict[str, list] = {name: [] for name in SCHEMAS["fields"].names}
-    ids_list, values_list = [], []
+def _fields_rows(run_id: str, results: Results):
+    """(metadata, ids or None, values) per field per result step, in the order Results
+    keeps its steps; the arrays as the results hold them (flattened views)."""
     held: dict[str, tuple[int, np.ndarray]] = {}  # field -> (ordinal, ids) last stored
     ordered = sorted(results.steps, key=lambda s: (s.index, s.mode or 0, s.value))
     for ordinal, step in enumerate(ordered):
@@ -609,32 +779,86 @@ def _fields_table(run_id: str, results: Results) -> pa.Table:
             same = f.name in held and np.array_equal(held[f.name][1], f.ids)
             if not same:
                 held[f.name] = (ordinal, f.ids)
-            for key, value in (
-                ("run_id", run_id),
-                ("field", f.name),
-                ("ordinal", ordinal),
-                ("step", step.index),
-                ("mode", step.mode),
-                ("kind", step.kind),
-                ("value", step.value),
-                ("location", f.location),
-                ("components", ",".join(f.components)),
-                ("count", len(f.ids)),
-                ("ids_from", held[f.name][0]),
-            ):
-                rows[key].append(value)
-            ids_list.append(None if same else np.asarray(f.ids, np.int64))
-            values_list.append(np.ascontiguousarray(f.values, np.float64).ravel())
-    if not values_list:
-        return SCHEMAS["fields"].empty_table()
-    columns = {
-        k: pa.array(v, SCHEMAS["fields"].field(k).type)
-        for k, v in rows.items()
-        if k not in ("ids", "values")
-    }
-    columns["ids"] = _lists(ids_list, pa.int64())
-    columns["values"] = _lists(values_list, pa.float64())
-    return pa.table(columns, schema=SCHEMAS["fields"])
+            meta = {
+                "run_id": run_id,
+                "field": f.name,
+                "ordinal": ordinal,
+                "step": step.index,
+                "mode": step.mode,
+                "kind": step.kind,
+                "value": step.value,
+                "location": f.location,
+                "components": ",".join(f.components),
+                "count": len(f.ids),
+                "ids_from": held[f.name][0],
+            }
+            ids = None if same else np.asarray(f.ids, np.int64)
+            yield meta, ids, np.ascontiguousarray(f.values, np.float64).ravel()
+
+
+_SAFE = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+class _PartFile:
+    """One partition's Parquet file of a run's fields, written a row group per row, and
+    what its Delta add action records: size, partition values, statistics."""
+
+    def __init__(self, table: Path, values: dict, schema: pa.Schema) -> None:
+        import pyarrow.parquet as pq
+
+        folder = "/".join(f"{k}={v if _SAFE.fullmatch(str(v)) else _hashed(str(v))}"
+                          for k, v in values.items())  # fmt: skip
+        self.rel = f"{folder}/part-00000-{uuid.uuid4()}-c000.zstd.parquet"
+        self.file = Path(table) / self.rel
+        self.file.parent.mkdir(parents=True, exist_ok=True)
+        self.values, self.schema = values, schema
+        self.scalars = [f.name for f in schema if f.name not in ("ids", "values")]
+        self.rows = 0
+        self.low: dict = {}
+        self.high: dict = {}
+        self.nulls = dict.fromkeys(self.scalars, 0)
+        self.writer = pq.ParquetWriter(
+            self.file, schema, compression="zstd", compression_level=3,
+            use_dictionary=False, write_statistics=True,
+        )  # fmt: skip
+
+    def write(self, meta: dict, ids, values: np.ndarray) -> None:
+        columns = [pa.array([meta[k]], self.schema.field(k).type) for k in self.scalars]
+        columns.append(_lists([ids], pa.int64()))
+        columns.append(_lists([values], pa.float64()))
+        self.writer.write_batch(pa.RecordBatch.from_arrays(columns, schema=self.schema),
+                                row_group_size=1)  # fmt: skip
+        self.rows += 1
+        for k in self.scalars:
+            v = meta[k]
+            if v is None:
+                self.nulls[k] += 1
+                continue
+            if k not in self.low or v < self.low[k]:
+                self.low[k] = v
+            if k not in self.high or v > self.high[k]:
+                self.high[k] = v
+
+    def close(self) -> dict:
+        self.writer.close()
+        st = self.file.stat()
+        stats = {"numRecords": self.rows, "minValues": self.low, "maxValues": self.high,
+                 "nullCount": self.nulls}  # fmt: skip
+        return {"path": self.rel, "size": st.st_size,
+                "partition_values": {k: str(v) for k, v in self.values.items()},
+                "modification_time": int(st.st_mtime * 1000), "data_change": True,
+                "stats": json.dumps(stats)}  # fmt: skip
+
+    def discard(self) -> None:
+        with contextlib.suppress(Exception):
+            self.writer.close()
+        self.file.unlink(missing_ok=True)
+
+
+def _hashed(value: str) -> str:
+    """A folder name for a partition value that isn't plain letters and digits: the
+    value itself is in the add action; the folder only has to be distinct and safe."""
+    return "h" + hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
 def _lists(arrays: list, typ: pa.DataType) -> pa.Array:
@@ -642,7 +866,10 @@ def _lists(arrays: list, typ: pa.DataType) -> pa.Array:
     lengths = [0 if a is None else len(a) for a in arrays]
     offsets = pa.array(np.concatenate([[0], np.cumsum(lengths)]).astype(np.int64))
     present = [a for a in arrays if a is not None]
-    flat = pa.array(np.concatenate(present) if present else np.empty(0), typ)
+    if len(present) == 1:  # one array: wrapped as it is, not copied
+        flat = pa.array(present[0], typ)
+    else:
+        flat = pa.array(np.concatenate(present) if present else np.empty(0), typ)
     mask = pa.array([a is None for a in arrays])
     return pa.LargeListArray.from_arrays(offsets, flat, mask=mask)
 

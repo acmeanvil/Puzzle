@@ -774,7 +774,8 @@ def test_member_lengths_are_in_the_unit_shown(engineering_units):
 
 
 def test_a_form_reads_a_run_once(window, monkeypatch):
-    """PANEL-13: choices rebuilt per keystroke read the stored run once."""
+    """PANEL-13: choices rebuilt per keystroke read the stored run's names once, and
+    never its values (package 14: they were the whole mesh and results)."""
     from types import SimpleNamespace
 
     from puzzle.gui import result_tools
@@ -784,11 +785,13 @@ def test_a_form_reads_a_run_once(window, monkeypatch):
     reads = []
     monkeypatch.setattr(derived, "run_for",
                         lambda *a: SimpleNamespace(run_id="r", mesh_id="m"))  # fmt: skip
-    monkeypatch.setattr(ResultStore, "read_mesh", lambda self, m: reads.append(m) or "mesh")
-    monkeypatch.setattr(ResultStore, "read_results", lambda self, r: "results")
+    monkeypatch.setattr(ResultStore, "group_dims", lambda self, m: reads.append(m) or {"A": 2})
+    monkeypatch.setattr(ResultStore, "outline", lambda self, r: "outline")
+    for name in ("read_mesh", "read_results"):
+        monkeypatch.setattr(ResultStore, name, lambda *a: pytest.fail("a whole run read"))
     study = _study(window, "Tip load")
     for _ in range(5):
-        assert result_tools._run_of(window, str(study.id)) == ("mesh", "results")
+        assert result_tools._outline_of(window, str(study.id)) == ({"A": 2}, "outline", "m")
     assert reads == ["m"]
 
 

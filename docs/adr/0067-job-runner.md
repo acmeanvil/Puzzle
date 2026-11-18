@@ -213,3 +213,7 @@ already in the right place. What sits behind it is too thin:
 ## Amended (2026-11-18, ADR 0090 package 11)
 
 Opening another project while a solve started in the window runs asks "Stop the run?" once, only with the job runner off (the solve lives in the window's thread then). With the runner on nothing is asked: the solve is the runner's and goes on (the maintainer, 2026-11-17).
+
+## Amended (2026-11-18, ADR 0090 package 14)
+
+A local job's stored spec leaves out environment variables that hold keys, tokens or passwords (by name, and every provider's key variable).

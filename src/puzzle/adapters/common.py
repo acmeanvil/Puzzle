@@ -333,23 +333,67 @@ class FaceLookup:
     A face inside the mesh (two bodies sharing nodes) has two parents. The one in the
     selection's own part is taken (ADR 0090 COMMON-3: the last element written won,
     which put a pressure, film or contact face on the other body and turned its
-    outward normal round); one still in doubt is refused, never guessed."""
+    outward normal round); one still in doubt is refused, never guessed.
 
-    lookup: dict[frozenset[int], list[tuple[int, int, tuple[int, int]]]]
+    Faces are kept as arrays (BE-17: a frozenset per element face in a dict was 2 s and
+    gigabytes at 400k tetrahedra): per corner count, each face's corners sorted, the
+    rows sorted, and a face found by binary search."""
+
+    def __init__(self, tables: dict[int, tuple]) -> None:
+        # corners -> (sorted keys as one void column, element ids, face numbers,
+        # entity index, insertion order), all sorted by key then insertion
+        self.tables = tables
+        self.entities: list[tuple[int, int]] = []
 
     @classmethod
     def build(cls, blocks: Iterable[CellBlock]) -> FaceLookup:
-        lookup: dict = {}
+        parts: dict[int, list] = {}
+        entities: list[tuple[int, int]] = []
+        order = 0
         for b in blocks:
             if b.element not in FACES:
                 raise InputError(f"{b.element} elements are not supported yet")
+            if b.entity not in entities:
+                entities.append(b.entity)
+            ent = entities.index(b.entity)
             for face_no, corners in enumerate(FACES[b.element], start=1):
-                keys = b.connectivity[:, corners]
-                for eid, key in zip(b.ids, keys, strict=True):
-                    lookup.setdefault(frozenset(key.tolist()), []).append(
-                        (int(eid), face_no, b.entity)
-                    )
-        return cls(lookup)
+                keys = np.sort(np.asarray(b.connectivity)[:, corners].astype(np.int64), axis=1)
+                n = len(keys)
+                # a face whose corners repeat is the set of the distinct ones
+                width = keys.shape[1]
+                if width > 1 and n and (np.diff(keys, axis=1) == 0).any():
+                    rows = [np.unique(r) for r in keys]
+                    for r, eid in zip(rows, b.ids, strict=True):
+                        parts.setdefault(len(r), []).append(
+                            (r[None, :], np.array([eid]), np.array([face_no]),
+                             np.array([ent]), np.array([order])))  # fmt: skip
+                        order += 1
+                    continue
+                parts.setdefault(width, []).append(
+                    (keys, np.asarray(b.ids, np.int64), np.full(n, face_no),
+                     np.full(n, ent), order + np.arange(n)))  # fmt: skip
+                order += n
+        tables = {}
+        for width, chunks in parts.items():
+            keys = np.concatenate([c[0] for c in chunks])
+            ids, faces, ents, seq = (np.concatenate([c[k] for c in chunks]) for k in (1, 2, 3, 4))
+            void = _rows_as_void(keys)
+            ix = np.lexsort((seq, void))
+            tables[width] = (void[ix], ids[ix], faces[ix], ents[ix])
+        out = cls(tables)
+        out.entities = entities
+        return out
+
+    def _hits(self, row: np.ndarray) -> list[tuple[int, int, tuple[int, int]]]:
+        """Every parent of the face with these corners, in the order written."""
+        key = np.unique(row.astype(np.int64))
+        table = self.tables.get(len(key))
+        if table is None:
+            return []
+        void, ids, faces, ents = table
+        k = _rows_as_void(key[None, :])[0]
+        lo, hi = np.searchsorted(void, k, "left"), np.searchsorted(void, k, "right")
+        return [(int(ids[i]), int(faces[i]), self.entities[int(ents[i])]) for i in range(lo, hi)]
 
     def of(
         self, surface: CellBlock, group: Group | None = None, mesh: Mesh | None = None,
@@ -362,23 +406,46 @@ class FaceLookup:
         if group is not None and mesh is not None:
             part = mesh.groups.get(group.name.split("/")[0])
             own = set(part.entities) if part is not None and part is not group else None
-        out = []
-        for row in surface.connectivity[:, :corners]:
-            hits = self.lookup.get(frozenset(row.tolist()))
-            if not hits:
+        rows = np.asarray(surface.connectivity)[:, :corners].astype(np.int64)
+        if not len(rows):
+            return []
+        keys = np.sort(rows, axis=1)
+        table = self.tables.get(corners)
+        plain = table is not None and not (np.diff(keys, axis=1) == 0).any()
+        if plain:  # the usual case, all at once: each face's first and last parent
+            void, ids, faces, ents = table
+            k = _rows_as_void(keys)
+            lo, hi = np.searchsorted(void, k, "left"), np.searchsorted(void, k, "right")
+            if (hi == lo).any():
                 raise InputError("a surface element does not lie on any volume element face")
-            if len(hits) > 1 and own is not None:
-                hits = [h for h in hits if h[2] in own] or hits
-            if len(hits) > 1 and strict and len({h[2] for h in hits}) > 1:
-                where = f"'{group.name}'" if group is not None else "a selection"
-                raise InputError(
-                    f"{where} has a face inside the model, between two bodies of one part "
-                    "sharing nodes: which side it loads is not known. Select the face on "
-                    "one body (or switch off Share faces), or use a contact there",
-                    code="ambiguous",
-                )
-            out.append(hits[-1][:2])
-        return out
+            single = hi - lo == 1
+            out = list(zip(ids[hi - 1].tolist(), faces[hi - 1].tolist(), strict=True))
+            for n in np.flatnonzero(~single):
+                out[n] = self._choose(self._hits(rows[n]), own, group, strict)
+            return out
+        return [self._choose(self._hits(r), own, group, strict) for r in rows]
+
+    @staticmethod
+    def _choose(hits, own, group, strict) -> tuple[int, int]:
+        if not hits:
+            raise InputError("a surface element does not lie on any volume element face")
+        if len(hits) > 1 and own is not None:
+            hits = [h for h in hits if h[2] in own] or hits
+        if len(hits) > 1 and strict and len({h[2] for h in hits}) > 1:
+            where = f"'{group.name}'" if group is not None else "a selection"
+            raise InputError(
+                f"{where} has a face inside the model, between two bodies of one part "
+                "sharing nodes: which side it loads is not known. Select the face on "
+                "one body (or switch off Share faces), or use a contact there",
+                code="ambiguous",
+            )
+        return hits[-1][:2]
+
+
+def _rows_as_void(keys: np.ndarray) -> np.ndarray:
+    """Each row of an integer array as one opaque value, to sort and search rows."""
+    keys = np.ascontiguousarray(keys, np.int64)
+    return keys.view(np.dtype((np.void, keys.dtype.itemsize * keys.shape[1]))).ravel()
 
 
 SELECTION_KINDS = ("body", "boundary", "edge", "point")

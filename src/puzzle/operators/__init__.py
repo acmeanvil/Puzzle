@@ -1440,19 +1440,30 @@ def sources(project, op, key: str) -> list[tuple[str, str, str]]:
     return out
 
 
-def downstream(project, oid: UUID) -> set[UUID]:
-    """Operators reading `oid`, directly or through others."""
+def readers_of(project) -> dict[UUID, list[UUID]]:
+    """Each object's readers among the operators (who reads it directly), worked out
+    once for a pass over many operators (BE-11)."""
     from puzzle.model.schema import Operator
 
-    ops = project.of_type(Operator)
+    out: dict[UUID, list[UUID]] = {}
+    for o in project.of_type(Operator):
+        for d in o.dependencies():
+            out.setdefault(d, []).append(o.id)
+    return out
+
+
+def downstream(project, oid: UUID, readers: dict | None = None) -> set[UUID]:
+    """Operators reading `oid`, directly or through others. `readers` (`readers_of`)
+    when the caller asks for many."""
+    if readers is None:
+        readers = readers_of(project)
     seen: set[UUID] = set()
     frontier = [oid]
     while frontier:
-        here = frontier.pop()
-        for o in ops:
-            if here in o.dependencies() and o.id not in seen:
-                seen.add(o.id)
-                frontier.append(o.id)
+        for o in readers.get(frontier.pop(), ()):
+            if o not in seen:
+                seen.add(o)
+                frontier.append(o)
     return seen
 
 
@@ -1480,10 +1491,11 @@ def studies_read(project, obj, seen: frozenset = frozenset()) -> list:
     return out
 
 
-def refuse(project, op) -> None:
+def refuse(project, op, readers: dict | None = None, kinds: tuple | None = None) -> None:
     """Refuse wiring that can't work: a port the source lacks, a type the input doesn't
     take, a value typed where none may be. Empty inputs are allowed (a node is wired up
-    a step at a time) and reported as problems instead."""
+    a step at a time) and reported as problems instead. `readers` as `downstream`'s,
+    `kinds` as `model_uses`', for a pass over many operators."""
     spec_of = TYPES[op.type]
     for key, inp in op.inputs.items():
         spec = spec_of.input(key)
@@ -1503,8 +1515,9 @@ def refuse(project, op) -> None:
                     f"{_types(spec.types)}, not a {TYPE_WORDS[given].lower()}",
                     code="invalid", path=op.name)  # fmt: skip
             if op.type in DATA and not is_pre(project, op):
-                uses = [u for o in (op, *(project.objects[d] for d in downstream(project, op.id)))
-                        for u in model_uses(project, o)]  # fmt: skip
+                below = downstream(project, op.id, readers)
+                uses = [u for o in (op, *(project.objects[d] for d in below))
+                        for u in model_uses(project, o, kinds)]  # fmt: skip
                 if uses:
                     raise PuzzleError(
                         f"'{op.name}' feeds the model ({uses[0]}), so it can't read results: "
@@ -1568,6 +1581,7 @@ def problems(project) -> list[Problem]:
     from puzzle.model.schema import Operator
 
     out = []
+    readers, kinds = readers_of(project), model_kinds(project)
     for op in project.of_type(Operator):
         spec_of = TYPES[op.type]
         for spec in spec_of.inputs:
@@ -1579,7 +1593,7 @@ def problems(project) -> list[Problem]:
                     f"{spec_of.label.lower()} '{op.name}': its {spec.label.lower()} input "
                     "is not wired", {"input": spec.key}))  # fmt: skip
         try:
-            refuse(project, op)
+            refuse(project, op, readers, kinds)
         except PuzzleError as exc:
             out.append(Problem("operator_input", op.name, exc.message, {}))
     # OP-1: a before-solving operator that can't be worked out is a problem of its own,
@@ -1873,6 +1887,44 @@ def reads_geometry(project, op, seen: frozenset = frozenset()) -> bool:
     return False
 
 
+_VALUES: dict = {}  # a project's parameter values by everything they are worked out from
+_VALUES_LOCK = __import__("threading").Lock()
+
+
+def _values_key(project, scripts: bool):
+    """What a project's parameter values follow: every object as it is (pre-solve
+    operators read operators and parameter sets; a few read geometry or materials),
+    the files operators read, by size and time, the project's folder and trust. None
+    when the project has no operators (nothing to work out, nothing to keep)."""
+    import hashlib
+
+    from puzzle.model.schema import Operator
+
+    ops = project.of_type(Operator)
+    if not ops:
+        return None
+    root = getattr(project, "root", None)
+    stamps = []
+    if root is not None:
+        from pathlib import Path
+
+        for op in ops:
+            name = getattr(op, "file", None)
+            if op.type == "file" and name:
+                base = Path(root)
+                for path in sorted(base.glob(name)) if any(c in name for c in "*?[") else [
+                        base / name]:  # fmt: skip
+                    try:
+                        st = path.stat()
+                        stamps.append((str(path), st.st_size, st.st_mtime_ns))
+                    except OSError:
+                        stamps.append((str(path), None))
+    digest = hashlib.sha256()
+    for o in project.objects.values():
+        digest.update(o.model_dump_json().encode())
+    return (str(root), bool(project.trusted), scripts, tuple(stamps), digest.hexdigest())
+
+
 def parameter_values(project, overrides: dict | None = None, failed: dict | None = None,
                      scripts: bool = True) -> dict[str, float]:  # fmt: skip
     """Every parameter by name, SI: the parameter sets' values, then each pre-solve
@@ -1880,7 +1932,30 @@ def parameter_values(project, overrides: dict | None = None, failed: dict | None
     `overrides` (operator id -> SI value) are a slider being dragged (the preview's).
     Never raises (OP-1): an operator that can't be worked out is left out, and with
     `failed` given, put there (operator name -> its PuzzleError; an untrusted project's
-    held scripts are its own problem). `scripts` False leaves script operators out."""
+    held scripts are its own problem). `scripts` False leaves script operators out.
+    Kept by what they are worked out from (`_values_key`), so a slow operator runs
+    once, not at every refresh and dropdown that asks (BE-11, package 13)."""
+    key = None if overrides else _values_key(project, scripts)
+    if key is not None:
+        with _VALUES_LOCK:
+            hit = _VALUES.get(key)
+        if hit is not None:
+            if failed is not None:
+                failed.update(hit[1])
+            return dict(hit[0])
+        got: dict = {}
+        out = _parameter_values(project, None, got, scripts)
+        with _VALUES_LOCK:
+            _VALUES[key] = (dict(out), dict(got))
+            while len(_VALUES) > 16:
+                _VALUES.pop(next(iter(_VALUES)))
+        if failed is not None:
+            failed.update(got)
+        return out
+    return _parameter_values(project, overrides, failed, scripts)
+
+
+def _parameter_values(project, overrides, failed, scripts) -> dict[str, float]:
     from puzzle.model.schema import ParameterSet
 
     out = {k: q.to_si() for ps in project.of_type(ParameterSet) for k, q in ps.values.items()}
@@ -1990,19 +2065,70 @@ def bound_quantities(obj, path: str = ""):
 
     from puzzle.model.schema import Quantity
 
-    if isinstance(obj, Quantity):
-        if obj.parameter:
-            yield path, obj
-        return
-    if isinstance(obj, BaseModel):
-        for name in type(obj).model_fields:
-            yield from bound_quantities(getattr(obj, name), f"{path}.{name}" if path else name)
-    elif isinstance(obj, dict):
-        for k, v in obj.items():
-            yield from bound_quantities(v, f"{path}.{k}" if path else str(k))
-    elif isinstance(obj, list | tuple):
-        for i, v in enumerate(obj):
-            yield from bound_quantities(v, f"{path}.{i}" if path else str(i))
+    out: list = []
+
+    def walk(obj, path: str) -> None:
+        if isinstance(obj, Quantity):
+            if obj.parameter:
+                out.append((path, obj))
+            return
+        if isinstance(obj, BaseModel):
+            for name in _may_hold(type(obj)):
+                v = getattr(obj, name)
+                if not isinstance(v, _LEAVES):
+                    walk(v, f"{path}.{name}" if path else name)
+        elif isinstance(obj, dict):
+            for k, v in obj.items():
+                if not isinstance(v, _LEAVES):
+                    walk(v, f"{path}.{k}" if path else str(k))
+        elif isinstance(obj, list | tuple):
+            for i, v in enumerate(obj):
+                if not isinstance(v, _LEAVES):
+                    walk(v, f"{path}.{i}" if path else str(i))
+
+    walk(obj, path)
+    yield from out
+
+
+_LEAVES = (str, int, float, bool, bytes, type(None), UUID)
+_MAY_HOLD: dict[type, tuple[str, ...]] = {}
+
+
+def _may_hold(cls) -> tuple[str, ...]:
+    """A model's fields whose type could hold a Quantity (BE-11: the walk over every
+    object's every field was most of `problems`); anything unsure is kept."""
+    names = _MAY_HOLD.get(cls)
+    if names is None:
+        names = tuple(n for n, f in cls.model_fields.items() if _could_hold(f.annotation))
+        _MAY_HOLD[cls] = names
+    return names
+
+
+def _could_hold(tp) -> bool:
+    import enum
+    import typing
+    from datetime import date, datetime, time
+
+    from pydantic import BaseModel
+
+    if tp in _LEAVES or tp in (datetime, date, time):
+        return False
+    origin = typing.get_origin(tp)
+    if origin is typing.Literal:
+        return False
+    if origin is typing.Annotated:
+        return _could_hold(typing.get_args(tp)[0])
+    if isinstance(tp, type) and origin is None:
+        if issubclass(tp, enum.Enum):
+            return False
+        if issubclass(tp, BaseModel):
+            return True
+        if issubclass(tp, _LEAVES):
+            return False
+    args = typing.get_args(tp)
+    if args:
+        return any(_could_hold(a) for a in args if a is not Ellipsis)
+    return True  # Any, a bare dict or list, a forward reference: could
 
 
 def _with_values(obj, values: dict, owner: str, failed: dict | None = None):
@@ -2061,18 +2187,24 @@ def with_parameters(project):
     return out
 
 
-def model_uses(project, op) -> list[str]:
-    """Where the model reads an operator, in words: history arguments naming it, sweeps
-    over it or taking their values from it."""
+def model_kinds(project) -> tuple[list, list]:
+    """The geometries and studies, for many `model_uses` in one pass (BE-11)."""
     from puzzle.model.schema import Geometry, Study
 
+    return project.of_type(Geometry), project.of_type(Study)
+
+
+def model_uses(project, op, kinds: tuple | None = None) -> list[str]:
+    """Where the model reads an operator, in words: history arguments naming it, sweeps
+    over it or taking their values from it. `kinds` from `model_kinds`."""
+    geometries, studies = kinds if kinds is not None else model_kinds(project)
     found = []
-    for g in project.of_type(Geometry):
+    for g in geometries:
         for step in g.history:
             for key, value in step.args.items():
                 if value == op.name:
                     found.append(f"{g.name}: {step.name} {key}")
-    for s in project.of_type(Study):
+    for s in studies:
         for step in s.sweeps():
             for p in step.parameters:
                 if p.source == op.id or (p.source is None and p.name == op.name):
