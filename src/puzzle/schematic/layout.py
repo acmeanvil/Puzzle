@@ -57,7 +57,7 @@ def rows(node: Node, unfolded: bool = False) -> list[Row]:
         put("subtitle", "", node.subtitle, LINE - 2)
     if node.badge:
         put("badge", "", node.badge)
-    if node.value:  # an operator's value (ADR 0062)
+    if node.value or node.value_state == "working":  # an operator's value (ADR 0062)
         put("value", node.verdict, node.value)
     if node.slider is not None:  # its knob, dragged along the row
         put("slider", "", "")

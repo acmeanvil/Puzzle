@@ -86,6 +86,7 @@ def test_a_slider_drives_the_width_and_previews_while_dragged(app, window):
         {"op": "set", "path": "increment", "value": {"value": 1, "unit": "mm"}},
         {"op": "set", "path": "inputs.value", "value": {"value": {"value": 30, "unit": "mm"}}},
     ]}])  # fmt: skip
+    w.schematic.wait()  # values are worked out off the GUI thread (ADR 0090 package 13)
     slider = w.schematic.items[sid]
     assert slider.node.column == 1 and slider.node.slider == pytest.approx((0.01, 0.05, 0.03))
     fill(w, argument="0:dx")
@@ -168,4 +169,5 @@ def test_the_properties_slider_and_a_table_from_a_csv(app, window, tmp_path):
     tid = operators.new_operator(w, "table")
     operators.read_csv(w, w.session.project.objects[UUID(tid)], str(csv))
     assert _op(w, "Table 1").text.startswith("t [mm]")
+    w.schematic.wait()
     assert w.schematic.items[tid].node.value == "2 rows × 2: t, load"

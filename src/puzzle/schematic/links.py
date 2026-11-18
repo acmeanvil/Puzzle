@@ -297,6 +297,61 @@ def clear_commands(choice: Choice, target) -> list[dict]:
     return []
 
 
+def data_wire_removal(project, wire, owner_id: str, feature_path: str = ""):
+    """What removing a data wire means (SCH-2): (commands, label) for the one command
+    the tree would make, or ([], why it can't be removed here). `owner_id` is the
+    object the wire's target node stands for, `feature_path` a load's node's place in
+    its component; the target port of a folded group's wire is "<member>::<port>"."""
+    port = wire.target_port.split("::", 1)[-1]
+    if port.startswith("transfer:"):
+        return ([{"command": "delete", "object": port.removeprefix("transfer:")}],
+                "Remove the transfer")  # fmt: skip
+    try:
+        owner = project.objects.get(parse(owner_id))
+    except ValueError:
+        owner = None
+    if owner is None:
+        return [], "what it goes into is gone"
+    edit = {"command": "edit", "object": str(owner.id)}
+    if owner.kind == "operator":
+        if port not in (owner.inputs or {}):
+            return [], "nothing is wired there"
+        from puzzle.operators import TYPES
+
+        spec = TYPES[owner.type].input(port)
+        what = spec.label if spec is not None else port
+        return [{**edit, "ops": [{"op": "remove", "path": f"inputs.{port}"}]}], f"Unwire {what}"
+    if port.startswith("sweep:") and owner.kind == "study":
+        n, j = (int(x) for x in port.split(":")[1:3])
+        sweeps = [i for i, s in enumerate(owner.steps) if s.type == "parametric_sweep"]
+        if n >= len(sweeps):
+            return [], "that sweep is gone"
+        k = sweeps[n]
+        step = owner.steps[k]
+        name = step.parameters[j].name if j < len(step.parameters) else "it"
+        path = f"steps.{k}" if len(step.parameters) == 1 else f"steps.{k}.parameters.{j}"
+        return [{**edit, "ops": [{"op": "remove", "path": path}]}], f"Stop sweeping {name}"
+    if port.startswith("value:") and feature_path:
+        key = port.removeprefix("value:")
+        q = _feature(owner, feature_path).values.get(key.split(".")[0]) if key else None
+        if q is None:
+            return [], "that value is gone"
+        value = {"value": q.value, "unit": q.unit}  # the value stays, following nothing
+        return ([{**edit, "ops": [{"op": "set", "path": f"{feature_path}.values.{key}",
+                                   "value": value}]}],
+                f"{key} stops following {q.parameter}")  # fmt: skip
+    if port.startswith("field:"):
+        return ([{**edit, "ops": [{"op": "remove", "path": port.removeprefix("field:")}]}],
+                "Stop using the field here")  # fmt: skip
+    if port.startswith("arg:"):
+        return [], "type a value in its place in the history step"
+    if owner.kind == "optimisation":
+        return [], "change the optimisation's variables, objective or constraints in its form"
+    if owner.kind == "result":
+        return [], "a derived result's cases are chosen in its form"
+    return [], "remove it where it is set"
+
+
 def source_kinds() -> set[str]:
     """Every kind that can be wired into something."""
     return {k for link in LINKS for k in link.sources}

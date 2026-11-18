@@ -400,7 +400,8 @@ class ModelTree(QTreeWidget):
                         f"{study_name} · {when}"
                     )
                     run = self._add(section, text, Node("run", r.run_id, "", text))
-                self._state(run, run_state(r, project))
+                # keys worked out once a refresh by the window (SCH-1), not once per run
+                self._state(run, run_state(r, project, keys=getattr(self, "run_keys", None)))
                 # Every result the run can show, by field (double-click or select one).
                 groups: dict = {}
                 for item in results_of((catalogs or {}).get(r.run_id, [])):

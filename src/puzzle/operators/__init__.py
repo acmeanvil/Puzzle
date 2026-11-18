@@ -1051,7 +1051,8 @@ ALIASES = {
     "measure": ("area", "volume", "length", "mass", "centroid", "bounding box",
                 "area moments", "volume moments", "dimensions"),
     "expression": ("evaluate", "formula", "smaller than", "larger than", "equality",
-                   "gate and", "gate or", "compare", "math"),
+                   "gate and", "gate or", "compare", "math", "if", "switch", "absolute",
+                   "abs"),
     "list": ("list item", "sub list", "list length", "sort list", "reverse list",
              "mass addition", "average", "statistics", "median", "percentile",
              "weighted average"),
@@ -1060,7 +1061,8 @@ ALIASES = {
     "result_table": ("deconstruct mesh", "results to table", "export results"),
     "points_table": ("sweep points", "design points", "gene pool"),
     "reduce": ("maximum", "minimum", "extremes", "bounds", "integral", "mean",
-               "integrate variables"),
+               "integrate variables", "integrate", "von mises", "vm", "average", "peak",
+               "hot spot", "probe"),  # the last six: OP-NEW-13, searches that found nothing
     "filter": ("threshold", "mask", "cull"),
     "columns": ("select columns", "rename", "drop columns", "pick columns"),
     "filter_rows": ("cull pattern", "cull index", "dispatch", "where", "filter content",
@@ -1128,7 +1130,7 @@ ALIASES = {
                    "over time"),
     "at_step": ("pick step", "time slice", "one step"),
     "compare_steps": ("baseline", "relative to step", "against a step", "step difference"),
-    "envelope": ("worst case", "max over steps", "upper bound", "lower bound"),
+    "envelope": ("worst case", "max over steps", "upper bound", "lower bound", "combine"),
     "match_x": ("resample", "interpolate onto", "align curves", "common x"),
     "area_under": ("integrate", "trapezoid", "impulse", "integral of curve"),
     "slope": ("derivative", "gradient", "rate of change", "dy/dx"),
@@ -1341,6 +1343,7 @@ def accepts(spec: PortSpec, given: str) -> bool:
         or (given == "number" and "list" in spec.types)
         or (given == "points" and "table" in spec.types)  # points are a table too
         or (given == "table" and "series" in spec.types)  # its first two number columns
+        or (given == "series" and "table" in spec.types)  # its x and y columns (OP-NEW-3)
         # A study's result where a field is wanted: read as its quantity at its step
         # (evaluate._input), so Field formula, Slice and the rest take a study directly.
         or (given == "result" and "field" in spec.types)

@@ -77,6 +77,9 @@ A curve (port type `series`) is x and y with their units: one curve, or one per 
 - `curve_from_table`, or a table wired straight into a curve input: its first two
   number columns (or `by` = [x column], `column` = y column); a Model value against
   temperature is such a table.
+- The other way: a curve wired into an input that takes a table (Sort, Largest N rows,
+  Keep rows where, Export ...) is read as its table of x and y (with a `curve` column
+  when there is one per step), named and in units as the curve's.
 
 What to do with them (units follow; a mismatch is refused with the reason):
 - `utilisation` (value ÷ allowable), `safety_factor` (allowable ÷ value), `margin`

@@ -273,7 +273,7 @@ Example: 2 * x + 5 mm with x = 10 mm → 25 mm; a list in gives a list out.
 - In: z: takes a number or list, or type one in (optional)
 - Out: Value: gives a number
 - Out: Passes: gives a verdict
-- Also found as: evaluate, formula, smaller than, larger than, equality, gate and, gate or, compare, math, expression
+- Also found as: evaluate, formula, smaller than, larger than, equality, gate and, gate or, compare, math, if, switch, absolute, abs, expression
 
 <!-- key: operator:list -->
 ### List item or statistic
@@ -510,7 +510,7 @@ Example: A run's von Mises on the Bracket → its maximum: 212 MPa.
 
 - In: Result: takes a result or field (needed)
 - Out: Value: gives a number
-- Also found as: maximum, minimum, extremes, bounds, integral, mean, integrate variables, reduce
+- Also found as: maximum, minimum, extremes, bounds, integral, mean, integrate variables, integrate, von mises, vm, average, peak, hot spot, probe, reduce
 
 <!-- key: operator:result_table -->
 ### Result table
@@ -684,7 +684,7 @@ Example: A path at every step → the largest stress at each point over all step
 - In: Curve 2: takes a curve (optional)
 - In: Curve 3: takes a curve (optional)
 - Out: Curve: gives a curve
-- Also found as: worst case, max over steps, upper bound, lower bound
+- Also found as: worst case, max over steps, upper bound, lower bound, combine
 
 <!-- key: operator:match_x -->
 ### Match x values

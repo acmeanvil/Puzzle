@@ -112,10 +112,17 @@ def _node(node, lay: Layout, dx: float, dy: float) -> list[str]:
                        f'fill="{state}"/>')  # fmt: skip
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{TEXT}" '
                        f'font-weight="bold">{escape(_cut(r.text, 30))}</text>')  # fmt: skip
-        elif r.kind == "value":  # an operator's value; a check's verdict in its colour
-            colour = VERDICT_COLOURS.get(r.key, TEXT)
+        elif r.kind == "value":  # a check's verdict in its colour only when current (SCH-3)
+            from puzzle.schematic import value_look
+
+            look, text = value_look(node)
+            colour = {"error": LIGHT.error, "stale": MUTED, "working": MUTED,
+                      "not_run": MUTED}.get(
+                look, VERDICT_COLOURS.get(look, TEXT))  # fmt: skip
+            style = ('font-style="italic"' if look in ("stale", "working", "not_run")
+                     else 'font-weight="bold"')  # fmt: skip
             out.append(f'<text x="{x + 10:.1f}" y="{base:.1f}" fill="{colour}" '
-                       f'font-weight="bold">{escape(_cut(r.text, 34))}</text>')  # fmt: skip
+                       f'{style}>{escape(_cut(text, 34))}</text>')  # fmt: skip
         elif r.kind == "slider" and node.slider is not None:
             low, high, value = node.slider
             f = min(max((value - low) / (high - low), 0.0), 1.0) if high > low else 0.0

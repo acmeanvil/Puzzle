@@ -960,8 +960,15 @@ class MainWindow(QMainWindow):
 
         # A run that finished after a failure here (the agent's, the CLI's) clears it.
         self.failed_studies = still_failed(self.failed_studies, runs)
-        self.states = status(s.project, runs, running, set(self.failed_studies))
+        from puzzle.schematic import run_keys_of
+
+        # Worked out once a refresh, for status, the schematic and its values (SCH-1).
+        self.run_records, self.run_keys = runs, run_keys_of(s.project, s.root)
+        self.run_records_of = s.project  # what they were worked out for
+        self.states = status(s.project, runs, running, set(self.failed_studies),
+                             keys=self.run_keys)  # fmt: skip
         self.tree.visibility = self.visibility  # shown and hidden marks (D2)
+        self.tree.run_keys = self.run_keys
         # Each panel on its own: one that fails is logged and the rest still follow the
         # project, Properties and the view last of all (GUI-24).
         panel = self._aside
@@ -1784,6 +1791,13 @@ class MainWindow(QMainWindow):
         if self.workbench.sketching is not None:  # Delete belongs to the sketch (GUI-26)
             self.workbench.workspace.delete_selected()
             return
+        from PySide6.QtWidgets import QApplication
+
+        focus = QApplication.focusWidget()
+        for panel in (self.schematic, self.schematic_panel):  # its own selection (SCH-UX-1)
+            if focus is not None and (focus is panel.canvas or panel.canvas.isAncestorOf(focus)):
+                panel.delete_selection()
+                return
         if not self._delete_acts_on_tree():
             return
         nodes = [i.data(0, TREE_ROLE) for i in self.tree.selectedItems()]
@@ -3842,6 +3856,7 @@ class MainWindow(QMainWindow):
         on_event=None,
         cancel=None,
         fraction=None,
+        quiet=False,
     ) -> Task:
         """Run `work(emit)` on the thread pool; `done(result)` back on the GUI thread.
 
@@ -3850,10 +3865,14 @@ class MainWindow(QMainWindow):
         called as `work(emit, emit_event)` and the events arrive there (ADR 0054).
         The status bar shows it (ADR 0045): Cancel sets `cancel` (a threading.Event the
         work watches), and `fraction()` (None while it can't tell) fills the bar.
+        `quiet` work (the schematic's values, ADR 0090 package 13) shows in neither: it
+        is short and comes back often.
         """
-        self.statusBar().showMessage(message)
+        if not quiet:
+            self.statusBar().showMessage(message)
         task = Task(work, events=on_event is not None)
-        self.progress.start(task, message.rstrip("…"), cancel)
+        if not quiet:
+            self.progress.start(task, message.rstrip("…"), cancel)
         if fraction is not None:
             ticker = QTimer(self, interval=500)
             ticker.timeout.connect(lambda: self.progress.update(task, fraction()))
@@ -3869,7 +3888,8 @@ class MainWindow(QMainWindow):
 
         def finish(result) -> None:
             self._finished(task)
-            self.statusBar().clearMessage()
+            if not quiet:
+                self.statusBar().clearMessage()
             done(result)
 
         def fail(exc) -> None:
@@ -4193,9 +4213,12 @@ class MainWindow(QMainWindow):
         except PuzzleError:
             runs = []
         from puzzle.project.status import status
+        from puzzle.schematic import run_keys_of
 
+        self.run_records, self.run_keys = runs, run_keys_of(s.project, s.root)
+        self.run_records_of, self.tree.run_keys = s.project, self.run_keys
         self.states = status(s.project, runs, self.running | self._pending_studies(),
-                             set(self.failed_studies))  # fmt: skip
+                             set(self.failed_studies), keys=self.run_keys)  # fmt: skip
         self._aside("the model tree", lambda: self.tree.populate(
             s.project, runs, self._field_catalogs(runs), self.states))  # fmt: skip
         self._aside("the history", lambda: self._fill_history(s))

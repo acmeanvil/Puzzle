@@ -336,3 +336,7 @@ Built 2026-11-13 (ADR 0072): a sandbox on Linux and Windows too (`scripts.kind()
 ## Amended by ADR 0090 package 3 (2026-11-17)
 
 Where no sandbox exists (Linux without `bwrap`, a macOS without `sandbox-exec`, a Windows where the AppContainer can't be made), a script is refused with the code `unsandboxed`, where this ADR had run it with the project folder only not given. The preference `scripts.unsandboxed` (off) lets a user run them there on their own machine; an agent can't set it. The maintainer kept the refusal (2026-11-17). If requirements change (a platform with no sandbox that must run scripts unattended, say), this is the place to revisit: the choices are the preference per project instead of per user, a container as the sandbox, or the old behaviour behind trust.
+
+## Amended (2026-11-18, ADR 0090 package 13)
+
+A before-solving operator that only after-solving ones read (a limit) is drawn in Results beside them; it is still a parameter by name. A node shows its required and wired inputs and one spare socket. A subtitle carries the settings that tell two operators of a type apart. A wire let go off a row takes an open input that fits and never replaces one. A typed input or a formula is edited on the node. The palette is used from the keyboard, opens where a wire is let go on nothing, and lists at most eight that fit, ranked.

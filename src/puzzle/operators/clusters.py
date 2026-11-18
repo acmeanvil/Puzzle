@@ -221,6 +221,54 @@ def commands(project, key: str, bindings: dict[str, tuple[str, str]] | None = No
     return out
 
 
+def copied(project, ids) -> list[dict]:
+    """The operators among `ids` as they are stored, for a paste later (the schematic's
+    Ctrl+C, ADR 0090 package 13): a snapshot, so a paste after they are deleted works."""
+    keep = {str(i) for i in ids}
+    return [o.model_dump(mode="json") for o in project.objects.values()
+            if o.kind == "operator" and str(o.id) in keep]  # fmt: skip
+
+
+def paste_commands(project, ops: list[dict]) -> tuple[list[dict], dict[str, str]]:
+    """Create commands for copies of `ops` (from `copied`), and old id -> new id: names
+    "<name> copy" made unique, inputs from another copied operator wired to its copy,
+    inputs from anything else still in the project kept (the copy reads what the
+    original read), the rest dropped. One batch, so one undo."""
+    from uuid import UUID
+
+    new = {o["id"]: str(uuid4()) for o in ops}
+    names = {o.name for o in project.objects.values()}
+    out = []
+    left, ordered = list(ops), []  # what a copy reads is made before it
+    while left:
+        made = {o["id"] for o in ordered}
+        ready = [o for o in left if all((i or {}).get("source") not in new
+                                        or i["source"] in made
+                                        for i in (o.get("inputs") or {}).values())]  # fmt: skip
+        ready = ready or left[:1]  # a loop (refused by the model anyway): as they come
+        ordered += ready
+        left = [o for o in left if o not in ready]
+    for o in ordered:
+        data = {k: v for k, v in o.items() if k not in ("id", "kind")}
+        name = f"{o['name']} copy"
+        n = 2
+        while name in names:
+            name, n = f"{o['name']} copy {n}", n + 1
+        names.add(name)
+        inputs = {}
+        for key, inp in (o.get("inputs") or {}).items():
+            source = (inp or {}).get("source")
+            if source is None:
+                inputs[key] = inp
+            elif source in new:
+                inputs[key] = {**inp, "source": new[source]}
+            elif project.objects.get(UUID(source)) is not None:
+                inputs[key] = inp
+        data.update(id=new[o["id"]], name=name, inputs=inputs)
+        out.append({"command": "create", "kind": "operator", "data": data})
+    return out, new
+
+
 def summary() -> list[dict[str, Any]]:
     """Every template's key, name, help and ports (MCP, the menus)."""
     return [{"key": k, "name": t["name"], "help": t.get("help", ""),

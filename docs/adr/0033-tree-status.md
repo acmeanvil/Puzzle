@@ -47,3 +47,7 @@ Problems are listed today in the Problems tab, and objects with a problem get a 
 
 - Red text for invalid items (PrePoMax): it tells less than a state icon and is harder to read for colour-blind users.
 - Only the Problems tab: problems stay one click away from where the user is working.
+
+## Amended (2026-11-18, ADR 0090 package 13)
+
+`status` and `run_state` take `keys` (`graph.run_hashes`) worked out once by the caller; the window does so once per refresh.

@@ -81,6 +81,7 @@ def test_an_optimisation_from_the_form_to_apply_best(app, tmp_path):
                 if a.step == "optimise"]  # fmt: skip
         assert said and said[0].action == f"apply_best:{oid}"
         w.schematic.refresh()
+        w.schematic.wait()  # worked out off the GUI thread (ADR 0090 package 13)
         node = w.schematic.items[oid].node
         assert node.badge == "3 of 3 points" and node.value.startswith("best 7.5 mm")
         assert any(x.wire.kind == "drives" and x.a.node.object == str(study.id)
@@ -149,6 +150,7 @@ def test_an_optimiser_fills_the_panel_as_points_finish(app, tmp_path):
         front, feasible = w.optimisation.curve.series
         assert front[0] == "Pareto front" and len(feasible[1]) >= len(front[1]) >= 1
         w.schematic.refresh()
+        w.schematic.wait()
         assert w.schematic.items[oid].node.badge == f"{len(pts)} points"
     finally:
         wait(app, w)

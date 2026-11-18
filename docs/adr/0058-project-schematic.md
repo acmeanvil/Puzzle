@@ -246,3 +246,6 @@ All three phases.
 Not done: wires are not routed around nodes (cubic curves only), and a chip is not
 clickable on its own (its object is reached from the tree).
 
+## Amended (2026-11-18, ADR 0090 package 13)
+
+The build and the values are apart: `build(evaluate=False)` works nothing out, `values` does (the GUI on a worker, cached by content hashes, runs, units and root) and `fill` puts them on the nodes; the CLI, SVG and MCP still build whole. `value_look` is the one place that says how a value is drawn: from a run no longer current muted and marked, never in a verdict's colour; titles are tinted by state. Run keys are worked out once per refresh and passed in. The canvas has a selection of several (rubber band, Ctrl-click, Ctrl+A), Delete as one batch, copy and paste of operator chains, keys taken before the window's shortcuts, and panning on the middle button or Space. A data wire is removed from its menu or by Delete, one undoable command each (`links.data_wire_removal`). Bring up to date runs what the selection needs, only when asked. Search covers names, kinds, values and states. A component's badge counts its contacts, bolts and welds. The side panel is a help button and what a change here would put out of date.

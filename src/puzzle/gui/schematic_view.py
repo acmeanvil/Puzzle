@@ -101,6 +101,41 @@ def _socket(painter: QPainter, shape: str, at: QPointF) -> None:
         painter.drawEllipse(at, 4.5, 4.5)
 
 
+def _text(
+    painter: QPainter,
+    font: QFont,
+    colour: QColor,
+    band: QRectF,
+    text: str,
+    width: float,
+    align=Qt.AlignmentFlag.AlignLeft,
+) -> None:
+    """Text in `band`, cut short with "…" by its own font's measure (SCH-5: bold text
+    measured as plain overran the box and was clipped mid-letter)."""
+    from PySide6.QtGui import QFontMetricsF
+
+    painter.setFont(font)
+    painter.setPen(colour)
+    shown = QFontMetricsF(font).elidedText(text, Qt.TextElideMode.ElideRight, max(width, 8.0))
+    painter.drawText(band, align | Qt.AlignmentFlag.AlignVCenter, shown)
+
+
+def _title_tint(node, look: str) -> QBrush | None:
+    """The title bar's mark of what will happen (SCH-UX-8): hatched amber when out of
+    date, red when failed or missing, a check's verdict when current; else none."""
+    t = _colours()
+    if node.state == "out_of_date" or look == "stale":
+        return QBrush(QColor(t.needed), Qt.BrushStyle.BDiagPattern)
+    if node.state in ("failed", "missing") or look == "error":
+        colour = QColor(t.error)
+    elif look in ("pass", "fail"):
+        colour = QColor(t.verdicts[look])
+    else:
+        return None
+    colour.setAlpha(48)
+    return QBrush(colour)
+
+
 def _fraction(low: float, high: float, value: float) -> float:
     return min(max((value - low) / (high - low), 0.0), 1.0) if high > low else 0.0
 
@@ -130,6 +165,8 @@ class NodeItem(QGraphicsObject):
                                                             else "")  # fmt: skip
         for chip, text in node.tips.items():
             tip += f"\n{chip}: {text.lower()}"
+        if node.value:  # the whole value: the node may show it cut short (SCH-5)
+            tip += "\n" + sch.value_look(node)[1]
         if node.help:  # an operator: what it does, an example, its ports (ADR 0071)
             tip += "\n\n" + node.help
         self.setToolTip(tip)
@@ -151,28 +188,31 @@ class NodeItem(QGraphicsObject):
         head = QPainterPath()
         head.addRoundedRect(QRectF(0.5, 0.5, self.w - 1, TITLE), 6, 6)
         painter.fillPath(head, QColor(t.raised))
+        look, value_text = sch.value_look(node)
+        tint = _title_tint(node, look)  # SCH-UX-8: the state on the title, not a 4 px bar
+        if tint is not None:
+            painter.fillPath(head, tint)
         state = _state_colour(node.state)
         painter.fillRect(QRectF(0, 0, 4, self.h), state)
         bold, plain, small = QFont(painter.font()), QFont(painter.font()), QFont(painter.font())
         bold.setBold(True)
         small.setPointSizeF(max(plain.pointSizeF() - 1.5, 7.0))
-        metrics = painter.fontMetrics()
         for r in rows(node, self.unfolded):
             band = QRectF(10, r.top, self.w - 20, r.height)
             if r.kind == "title":
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(state)
                 painter.drawEllipse(QPointF(self.w - 12, TITLE / 2), 4, 4)
-                painter.setFont(bold)
-                painter.setPen(QColor(t.text))
-                text = metrics.elidedText(r.text, Qt.TextElideMode.ElideRight, int(self.w - 40))
-                painter.drawText(band, Qt.AlignmentFlag.AlignVCenter, text)
-            elif r.kind == "value":  # an operator's value; a check's verdict in its colour
-                painter.setFont(bold)
-                colour = sch.VERDICT_COLOURS.get(r.key)
-                painter.setPen(QColor(colour) if colour else QColor(t.text))
-                text = metrics.elidedText(r.text, Qt.TextElideMode.ElideRight, int(self.w - 20))
-                painter.drawText(band, Qt.AlignmentFlag.AlignVCenter, text)
+                _text(painter, bold, QColor(t.text), band, r.text, self.w - 40)
+            elif r.kind == "value":  # SCH-3: a verdict's colour only when it is current
+                font = QFont(bold)
+                if look in ("stale", "working", "not_run"):
+                    font.setBold(False)
+                    font.setItalic(True)
+                colour = {"pass": t.verdicts["pass"], "fail": t.verdicts["fail"],
+                          "error": t.error, "stale": t.muted, "working": t.muted,
+                          "not_run": t.muted}.get(look, t.text)  # fmt: skip
+                _text(painter, font, QColor(colour), band, value_text, self.w - 20)
             elif r.kind == "slider" and node.slider is not None:  # its knob (ADR 0062)
                 low, high, value = node.slider
                 left, right = 14.0, self.w - 14.0
@@ -201,32 +241,35 @@ class NodeItem(QGraphicsObject):
                     for a, b in zip(q, q[1:], strict=False):
                         painter.drawLine(a, b)
             elif r.kind in ("subtitle", "badge", "used", "fold", "part"):
-                painter.setFont(small)
-                painter.setPen(QColor(t.muted))
-                text = metrics.elidedText(r.text, Qt.TextElideMode.ElideRight, int(self.w - 20))
-                painter.drawText(band, Qt.AlignmentFlag.AlignVCenter, text)
+                _text(painter, small, QColor(t.muted), band, r.text, self.w - 20)
             elif r.kind == "chip":
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(QColor(t.raised))
                 painter.drawRoundedRect(QRectF(8, r.top + 2, self.w - 16, r.height - 4), 7, 7)
-                painter.setFont(small)
-                painter.setPen(QColor(t.muted))
-                painter.drawText(QRectF(14, r.top, self.w - 28, r.height),
-                                 Qt.AlignmentFlag.AlignVCenter, r.text)  # fmt: skip
+                _text(painter, small, QColor(t.muted), QRectF(14, r.top, self.w - 28, r.height),
+                      r.text, self.w - 28)  # fmt: skip
             elif r.kind in ("in", "out"):
                 port = node.port(r.key)
                 colour = QColor(sch.port_colour(port)) if port is not None and (
                     port.type or port.carries) else _flow_colour("")  # fmt: skip
                 x = self.w if r.kind == "out" else 0.0
-                painter.setPen(QPen(QColor(t.sunken), 1.5))
+                lit = self.panel.socket_lit(node.id, r.key, r.kind)
+                if lit is False:  # a wire is drawn that it doesn't take (SCH-UX-3)
+                    colour.setAlpha(60)
+                painter.setPen(QPen(QColor(t.accent if lit else t.sunken), 2.5 if lit else 1.5))
                 painter.setBrush(colour)
-                _socket(painter, sch.socket_shape(port), QPointF(x, r.middle))
-                painter.setFont(plain)
-                painter.setPen(QColor(t.text))
+                if lit:
+                    painter.save()
+                    painter.translate(x, r.middle)
+                    painter.scale(1.4, 1.4)
+                    _socket(painter, sch.socket_shape(port), QPointF(0, 0))
+                    painter.restore()
+                else:
+                    _socket(painter, sch.socket_shape(port), QPointF(x, r.middle))
                 align = (
                     Qt.AlignmentFlag.AlignRight if r.kind == "out" else Qt.AlignmentFlag.AlignLeft
                 )
-                painter.drawText(band, align | Qt.AlignmentFlag.AlignVCenter, r.text)
+                _text(painter, plain, QColor(t.text), band, r.text, self.w - 20, align)
 
     def hoverMoveEvent(self, event) -> None:  # noqa: N802 - Qt's name
         """Over a socket, what that port takes or gives; elsewhere, the node's card."""
@@ -284,6 +327,10 @@ class NodeItem(QGraphicsObject):
             event.accept()
             return
         self._pressed_at = self.pos()
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            # SCH-UX-1: Shift-click adds to the selection as Ctrl-click does (Qt's own
+            # Ctrl toggles the item and keeps the rest).
+            event.setModifiers(event.modifiers() | Qt.KeyboardModifier.ControlModifier)
         super().mousePressEvent(event)
 
     def knob_row(self):
@@ -315,20 +362,46 @@ class NodeItem(QGraphicsObject):
             self._sliding = False
             self.panel.slide_done(self.node)
             return
+        adding = bool(event.modifiers() & (Qt.KeyboardModifier.ControlModifier
+                                           | Qt.KeyboardModifier.ShiftModifier))  # fmt: skip
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            event.setModifiers(event.modifiers() | Qt.KeyboardModifier.ControlModifier)
         super().mouseReleaseEvent(event)
         fold = next((r for r in rows(self.node, self.unfolded) if r.kind == "fold"), None)
         start, self._pressed_at = self._pressed_at, None
         if start is not None and start != self.pos():
-            self.panel.dropped(self, start)
-        elif fold is not None and fold.top <= event.pos().y() < fold.top + fold.height:
+            self.panel.dropped(self, start)  # every selected node went with it
+            self.panel.chosen(self.node, add=True)
+            return
+        if fold is not None and fold.top <= event.pos().y() < fold.top + fold.height:
             self.panel.toggle_parts(self.node.id)
-        self.panel.chosen(self.node)
+        if adding and not self.isSelected():  # Ctrl-clicked off: the rest stay chosen
+            self.panel._scene_selected()
+            return
+        self.panel.chosen(self.node, add=adding)
+
+    def row_at(self, pos: QPointF):
+        """The row under a point in the item's coordinates."""
+        return next((r for r in rows(self.node, self.unfolded)
+                     if r.top <= pos.y() < r.top + r.height), None)  # fmt: skip
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """On a typed input's row, or an operator's own setting, edit it here (SCH-UX-2);
+        elsewhere open the node where it is edited."""
+        row = self.row_at(event.pos())
+        if row is not None and self.panel.edit_on_node(self, row):
+            event.accept()
+            return
         self.panel.open_node(self.node)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt's name
         self.panel.menu_for(self.node, event.screenPos())
+
+
+def _open(op, key: str) -> bool:
+    """Whether an operator's input is neither wired nor typed in."""
+    inp = (op.inputs or {}).get(key)
+    return inp is None or (inp.source is None and inp.value is None)
 
 
 def _uuid_of(text: str):
@@ -342,6 +415,8 @@ class WireItem(QGraphicsPathItem):
         super().__init__()
         self.wire, self.a, self.b = wire, a, b
         self.setZValue(1 if wire.kind == "data" else 0)
+        if wire.kind != "drives":  # chosen with a click, removed with Delete (SCH-2)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         if wire.kind == "data":
             self.setPen(QPen(QColor(sch.wire_colour(wire)), 2.5))
             if wire.label:
@@ -354,10 +429,23 @@ class WireItem(QGraphicsPathItem):
         self.label = None
         self.update_path()
 
+    def shape(self) -> QPainterPath:
+        """A 10 px band along the wire, so a thin one can be hit (SCH-2)."""
+        from PySide6.QtGui import QPainterPathStroker
+
+        stroker = QPainterPathStroker()
+        stroker.setWidth(10)
+        return stroker.createStroke(self.path())
+
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        """A use wire (a reference): Remove it (ADR 0071 decision 8)."""
+        """A use wire (a reference): Remove it (ADR 0071 decision 8); a data wire: what
+        it carries unwired, or its ends gone to (SCH-2)."""
         if self.wire.kind == "use":
             self.a.panel.unlink(self.a.node, self.b.node, event.screenPos())
+            event.accept()
+            return
+        if self.wire.kind == "data":
+            self.a.panel.wire_menu(self, event.screenPos())
             event.accept()
             return
         super().contextMenuEvent(event)
@@ -425,20 +513,108 @@ class SchematicScene(QGraphicsScene):
             self.panel.wire_to(event.scenePos())
         super().mouseMoveEvent(event)
 
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        self._pressed = event.scenePos()
+        super().mousePressEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if self.panel.drawing is not None:
             self.panel.end_wire(event.scenePos())
             return
-        if self.itemAt(event.scenePos(), self.views()[0].transform()) is None:
-            self.panel.chosen(None)
+        pressed = getattr(self, "_pressed", None)
+        clicked = pressed is not None and (event.scenePos() - pressed).manhattanLength() < 4
+        if clicked and self.itemAt(event.scenePos(), self.views()[0].transform()) is None:
+            self.panel.chosen(None)  # a click on nothing; a rubber band keeps its choice
         super().mouseReleaseEvent(event)
 
 
+# The keys the canvas keeps for itself while it has the focus (SCH-UX-1), before the
+# window's own shortcuts (Delete, Duplicate) see them.
+CANVAS_KEYS = {
+    (Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_Backspace, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier),
+    (Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier),
+    (Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier),
+    (Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier),
+    (Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier),
+    (Qt.Key.Key_F, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_F, Qt.KeyboardModifier.ShiftModifier),
+    (Qt.Key.Key_Home, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_Left, Qt.KeyboardModifier.NoModifier),
+    (Qt.Key.Key_Right, Qt.KeyboardModifier.NoModifier),
+}
+
+
+def _key_of(event) -> tuple:
+    mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+    if mods & Qt.KeyboardModifier.MetaModifier and not mods & Qt.KeyboardModifier.ControlModifier:
+        mods = Qt.KeyboardModifier.ControlModifier  # ⌘ on macOS reads as Meta under Qt
+    return (Qt.Key(event.key()), Qt.KeyboardModifier(mods))
+
+
 class SchematicCanvas(QGraphicsView):
-    """Pan by dragging the background, zoom with the wheel; right-click the background
-    for New (what the tree can add), placed there."""
+    """Drag the background to choose with a rubber band; pan with the middle button or
+    Space and drag; zoom with the wheel; right-click the background for New (what the
+    tree can add), placed there. Keys: Delete, Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+D, F or
+    Home (fit all), Shift+F (fit the selection), Ctrl+F (find), Esc, Left and Right
+    (along the wires)."""
 
     panel = None
+    MODE = QGraphicsView.DragMode.RubberBandDrag
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if event.button() == Qt.MouseButton.MiddleButton:  # pan, whatever the mode
+            self._pan_from(event)
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if event.button() == Qt.MouseButton.MiddleButton and getattr(self, "_panning", False):
+            from PySide6.QtGui import QMouseEvent
+
+            self._panning = False
+            super().mouseReleaseEvent(QMouseEvent(
+                event.type(), event.position(), event.globalPosition(),
+                Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, event.modifiers()))  # fmt: skip
+            self.setDragMode(self.MODE)
+            return
+        super().mouseReleaseEvent(event)
+
+    def _pan_from(self, event) -> None:
+        """Qt's hand drag pans with the left button only: the middle press is handed on
+        as a left one with that mode on, put back on release."""
+        from PySide6.QtGui import QMouseEvent
+
+        self._panning = True
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        super().mousePressEvent(QMouseEvent(
+            event.type(), event.position(), event.globalPosition(), Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton, event.modifiers()))  # fmt: skip
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)  # Space + drag pans
+            return
+        inline = getattr(self.panel, "inline", None) if self.panel is not None else None
+        if inline is not None:  # typing on a node: its own keys; Esc leaves it unchanged
+            if event.key() == Qt.Key.Key_Escape:
+                inline._finish(False)
+                event.accept()
+                return
+            super().keyPressEvent(event)
+            return
+        if self.panel is not None and self.panel.key(_key_of(event)):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.setDragMode(self.MODE)
+            return
+        super().keyReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if self.itemAt(event.pos()) is None and self.panel is not None:
@@ -452,14 +628,24 @@ class SchematicCanvas(QGraphicsView):
     def __init__(self, scene: QGraphicsScene) -> None:
         super().__init__(scene)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(self.MODE)
+        self.setRubberBandSelectionMode(Qt.ItemSelectionMode.IntersectsItemShape)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setBackgroundBrush(QBrush(QColor(_colours().surface)))
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def event(self, event) -> bool:
-        """Tab opens the operator palette (ADR 0062), not the next widget's focus."""
+        """Tab opens the operator palette (ADR 0062), not the next widget's focus; the
+        canvas's own keys are kept from the window's shortcuts while it has the focus."""
         from PySide6.QtCore import QEvent
 
+        editing = self.panel is not None and getattr(self.panel, "inline", None) is not None
+        if editing and event.type() == QEvent.Type.ShortcutOverride:
+            event.accept()  # an edit on a node takes every key, Delete and Ctrl+C too
+            return True
+        if event.type() == QEvent.Type.ShortcutOverride and _key_of(event) in CANVAS_KEYS:
+            event.accept()
+            return True
         if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Tab:
             panel = getattr(self.scene(), "panel", None)
             if panel is not None and panel.window.session is not None:
@@ -516,6 +702,49 @@ class Minimap(QGraphicsView):
         self.main.centerOn(self.mapToScene(event.position().toPoint()))
 
 
+# Worked-out values by `_value_key`, shared by the centre's panel and the dock's, and
+# the panels waiting on a worker for each key (ADR 0090 package 13, SCH-1).
+_SHOWN: dict = {}
+_PENDING: dict = {}
+_CLIPBOARD: list = []  # operators copied with Ctrl+C, as stored (SCH-UX-1)
+
+
+def _value_key(project, runs, root) -> str:
+    """What the operators' values follow: every object's content hash (an operator's
+    covers what it reads, files included), the runs stored, the display units their
+    texts are in and the folder files are read from. The same key, the same values:
+    a refresh after a selection, a fold or another panel evaluates nothing."""
+    import hashlib
+    import json
+
+    from puzzle.project.graph import content_hashes
+    from puzzle.settings import current
+
+    try:
+        hashes = sorted((str(k), v) for k, v in content_hashes(project, root).items())
+    except ValueError:  # a transfer loop: no key, so worked out every time
+        import uuid
+
+        return uuid.uuid4().hex
+    stored = sorted((r.run_id, r.run_key, r.status) for r in runs)
+    payload = [hashes, stored, repr(current().display_units()), str(root)]
+    return hashlib.sha256(json.dumps(payload, default=str).encode()).hexdigest()
+
+
+def _evaluate(project, store, keys, root) -> dict:
+    """`schematic.values` on a worker. Operators that read the exact geometry hold
+    OpenCASCADE's lock while they are worked out (Gotchas: OCC is serialised)."""
+    from puzzle.operators import reads_geometry
+
+    if any(o.kind == "operator" and reads_geometry(project, o)
+           for o in project.objects.values()):  # fmt: skip
+        from puzzle.geometry.session import occ_lock
+
+        with occ_lock:
+            return sch.values(project, store, keys, root)
+    return sch.values(project, store, keys, root)
+
+
 def unfold(node, port: str | None):
     """The member node and port a folded group's port stands for (ADR 0071: a cluster's
     ports are its members', keyed "<member id>::<port>"); anything else as given."""
@@ -546,13 +775,21 @@ class SchematicPanel(QWidget):
         self.drawing = None  # (item, port, temporary path) while a wire is drawn
         self._root = None
         self._fitted = False
+        self._key = None  # the values this panel waits for or shows (`_value_key`)
+        self.inline = None  # a line edit open on a node (SCH-UX-2)
+        self.fits = None  # while a wire is drawn: the sockets that take it (SCH-UX-3)
+        self.builds = self.evaluations = 0  # counted, so a test holds SCH-1
 
         bar = QHBoxLayout()
         bar.setContentsMargins(6, 4, 6, 4)
-        self.search = QLineEdit(placeholderText="Find by name or kind")
+        self.search = QLineEdit(placeholderText="Find (Ctrl+F): name, kind, value, state")
         self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(lambda _: self.highlight())
-        self.search.returnPressed.connect(self._go_to_found)
+        self.search.textChanged.connect(lambda _: self._searched())
+        self.search.returnPressed.connect(lambda: self._go_to_found())
+        self.found = QLabel("")  # "3 of 12" (SCH-6)
+        from puzzle.gui import theme as _theme
+
+        _theme.role(self.found, "muted")
         self.state_filter = QComboBox()
         for text, value in STATES:
             self.state_filter.addItem(text, value)
@@ -593,6 +830,12 @@ class SchematicPanel(QWidget):
         self.new.setMenu(QMenu(self.new))
         self.new.menu().setToolTipsVisible(True)
         self.new.menu().aboutToShow.connect(lambda: self.fill_new_menu(self.new.menu()))
+        self.update_button = QPushButton("Bring up to date")
+        self.update_button.setToolTip(
+            "Run the studies the selection needs (everything, with nothing selected), "
+            "sources of transfers first: values shown as out of date become current"
+        )
+        self.update_button.clicked.connect(lambda: self.bring_up_to_date())
         self.fit = QPushButton("Fit")
         self.fit.clicked.connect(self.fit_all)
         self.tidy = QPushButton("Tidy layout")
@@ -603,19 +846,22 @@ class SchematicPanel(QWidget):
         self.export.clicked.connect(lambda: self.export_picture())
         # Narrow windows squeeze the bar, never widen the window (the centre's minimum).
         self.search.setMinimumWidth(60)
-        for button in (self.new, self.operators, self.reach, self.fit, self.tidy, self.export):
+        for button in (self.new, self.operators, self.reach, self.update_button, self.fit,
+                       self.tidy, self.export):  # fmt: skip
             button.setMinimumWidth(36)  # its text clips rather than set the minimum
         for combo in (self.state_filter, self.uses):
             combo.setSizeAdjustPolicy(
                 QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
             )
             combo.setMinimumContentsLength(6)
-        for w in (self.new, self.operators, self.search, self.state_filter, self.uses, self.reach):
+        for w in (self.new, self.operators, self.search, self.found, self.state_filter,
+                  self.uses, self.reach):  # fmt: skip
             bar.addWidget(w)
         bar.addStretch(1)
-        for w in (self.fit, self.tidy, self.export):
+        for w in (self.update_button, self.fit, self.tidy, self.export):
             bar.addWidget(w)
         self.scene = SchematicScene(self)
+        self.scene.selectionChanged.connect(self._scene_selected)
         self.canvas = SchematicCanvas(self.scene)
         self.canvas.panel = self
         self._place_next: tuple[float, float] | None = None  # where the next new node goes
@@ -649,23 +895,34 @@ class SchematicPanel(QWidget):
             self._root = session.root
             self.view = view_state.load(session.root)
         self._select_uses(current().get("schematic.uses"))
-        try:
-            runs = self.window._store().runs()
-        except Exception:  # noqa: BLE001 - an old store: the model still shows
-            runs = []
-        states = getattr(self.window, "states", None)
-        group_ids = {str(o.id) for o in session.project.objects.values() if o.kind == "group"}
-        if self.view.prune(self._node_ids(session.project, runs), group_ids):
-            view_state.save(session.root, self.view)
+        project = session.project
         try:
             store = self.window._store()
         except Exception:  # noqa: BLE001 - no store: operators show no values
             store = None
+        # The window's refresh worked out the runs and their keys for this project once
+        # (SCH-1); a refresh of the panel alone (a fold, the tab shown) reads them here.
+        fresh = getattr(self.window, "run_records_of", None) is project
+        runs = self.window.run_records if fresh else None
+        keys = self.window.run_keys if fresh else None
+        if runs is None:
+            try:
+                runs = store.runs() if store is not None else []
+            except Exception:  # noqa: BLE001 - an old store: the model still shows
+                runs = []
+        states = getattr(self.window, "states", None)
         before = set(self.schematic.nodes) if getattr(self, "schematic", None) else None
-        self.schematic = sch.build(session.project, runs, states, root=session.root,
+        old = {n.id: n for n in self._all_nodes()} if before is not None else {}
+        self.schematic = sch.build(project, runs, states, root=session.root,
                                    folded=frozenset(self.view.folded),
                                    fields=bool(current().get("connections.schematic")),
-                                   store=store)  # fmt: skip
+                                   store=store, keys=keys, evaluate=False)  # fmt: skip
+        self.builds += 1
+        self._carry_over(old)
+        group_ids = {str(o.id) for o in project.objects.values() if o.kind == "group"}
+        if self.view.prune(self._node_ids(project), group_ids):
+            view_state.save(session.root, self.view)
+        self._values_for(project, runs, store, keys, session.root)
         if self._place_next is not None and before is not None:  # made from the New menu
             made = [i for i in self.schematic.nodes if i not in before]
             if made:
@@ -678,17 +935,112 @@ class SchematicPanel(QWidget):
         if not self.schematic.nodes:
             self.empty.setText("Nothing to show yet: import geometry or start a new part.")
 
-    def _node_ids(self, project, runs) -> set[str]:
-        """Every node id the project can have, folded or not, so pruning keeps the
-        places of nodes inside folded groups."""
-        built = sch.build(project, runs, states={})
+    def _node_ids(self, project) -> set[str]:
+        """Every node id the project has, folded or not (a folded group keeps its
+        members), so pruning keeps the places of nodes inside folded groups; from the
+        one build, not a second (SCH-1)."""
+        s = self.schematic
+        inside = {m.id for n in s.nodes.values() if n.kind == "group" for m in n.inside}
         groups = {f"group:{o.id}" for o in project.objects.values() if o.kind == "group"}
-        return set(built.nodes) | groups
+        return set(s.nodes) | inside | groups
+
+    # --- values, worked out off the GUI thread (SCH-1) ----------------------------
+
+    def _values_for(self, project, runs, store, keys, root) -> None:
+        """The operators' values: the ones already worked out for this project, its runs
+        and the display units (`_value_key`), else worked out on a worker while the
+        nodes show "working…"; nothing is evaluated on the GUI thread."""
+        if not any(n.value_state == "working" for n in self._all_nodes()):
+            self._key = None
+            return
+        key = _value_key(project, runs, root)
+        self._key = key
+        found = _SHOWN.get(key)
+        if found is not None:
+            sch.fill(self.schematic, found)
+            return
+        self.evaluations += 1
+        waiting = _PENDING.setdefault(key, [])
+        start = not waiting
+        waiting.append(self)
+        if not start:  # the other panel's worker is on it
+            return
+        where = store.root if store is not None else None
+
+        def work(_emit):
+            from puzzle.results import ResultStore
+
+            own = ResultStore(where) if where is not None else None  # its own reader
+            return _evaluate(project, own, keys, root)
+
+        def done(found) -> None:
+            _SHOWN[key] = found
+            while len(_SHOWN) > 4:
+                _SHOWN.pop(next(iter(_SHOWN)))
+            for panel in _PENDING.pop(key, []):
+                with contextlib.suppress(RuntimeError):  # its window has gone
+                    panel._arrived(key, found)
+
+        def failed(_exc) -> None:
+            _PENDING.pop(key, None)
+
+        self.window.background("Working out the schematic's values…", work, done,
+                               failed=failed, lock=False, quiet=True)  # fmt: skip
+
+    def _carry_over(self, old: dict) -> None:
+        """While a node's value is worked out again, the one it had is shown muted as
+        "working" (never in a verdict's colour), so the canvas doesn't blank on each
+        edit, and a slider's knob can still be dragged."""
+        for node in self._all_nodes():
+            was = old.get(node.id)
+            if node.value_state == "working" and was is not None and was.value:
+                node.value, node.verdict, node.sketch = was.value, was.verdict, was.sketch
+                node.slider = was.slider
+
+    def _arrived(self, key, found) -> None:
+        """Values back from the worker: drawn if they are still the ones wanted (a later
+        change has asked for its own)."""
+        if key != self._key or self.window.session is None:
+            return
+        sch.fill(self.schematic, found)
+        self._redraw_when_free(key)
+
+    def _redraw_when_free(self, key) -> None:
+        """Redraw for values that arrived, but not under a wire being drawn, a node being
+        dragged or an edit open on a node: tried again shortly."""
+        if key != self._key:
+            return
+        dragging = any(getattr(i, "_pressed_at", None) is not None for i in self.items.values())
+        if self.drawing is not None or self.inline is not None or dragging:
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(150, self, lambda: self._redraw_when_free(key))
+            return
+        self._draw()
+        self.selected.emit(self.current)
+
+    def _all_nodes(self):
+        for n in self.schematic.nodes.values():
+            yield n
+            yield from n.inside
+
+    def wait(self, timeout: float = 30.0) -> None:
+        """Until the values asked for are drawn (tests, scripts, a picture export)."""
+        import time
+
+        from PySide6.QtWidgets import QApplication
+
+        end = time.monotonic() + timeout
+        while self._key is not None and self._key in _PENDING and time.monotonic() < end:
+            QApplication.processEvents()
+            time.sleep(0.002)
 
     def _draw(self) -> None:
         keep = self.canvas.transform(), self.canvas.horizontalScrollBar().value(), \
             self.canvas.verticalScrollBar().value()  # fmt: skip
         first = not self.items
+        chosen = set(self.selection()) if self.items else set()
+        self._syncing = True  # clearing the scene drops its selection: kept below
         self.scene.clear()
         self.items, self.wires, self.frames = {}, [], []
         s = self.schematic
@@ -730,10 +1082,12 @@ class SchematicPanel(QWidget):
                 self.scene.addItem(frame)
                 self.frames.append(frame)
         self.scene.setSceneRect(self.scene.itemsBoundingRect().adjusted(-200, -200, 200, 200))
-        if self.current in self.items:
-            self.items[self.current].setSelected(True)
-        else:
+        for nid in chosen | {self.current}:
+            if nid in self.items:
+                self.items[nid].setSelected(True)
+        if self.current not in self.items:
             self.current = ""
+        self._syncing = False
         self.highlight()
         if first:
             self.fit_all()
@@ -784,14 +1138,9 @@ class SchematicPanel(QWidget):
             ends = {w.target if w.source == self.current else w.source for w in s.wires
                     if self.current in (w.source, w.target)}  # fmt: skip
             found = {self.current} | reach(self.current) | ends
-        words = self.search.text().strip().lower()
-        if words:
-            match = {
-                k
-                for k, n in self.schematic.nodes.items()
-                if words in n.label.lower() or words in sch.KIND_WORDS.get(n.kind, "").lower()
-            }
-            found = match if found is None else found & match | {self.current}
+        match = self.matches()
+        if match is not None:  # a search lights what it finds, wherever it is (SCH-6)
+            found = set(match)
         state = self.state_filter.currentData()
         if state:
             match = {k for k, n in self.schematic.nodes.items() if n.state == state}
@@ -838,12 +1187,53 @@ class SchematicPanel(QWidget):
                 self.canvas.resetTransform()
                 self.canvas.centerOn(self.scene.itemsBoundingRect().center())
 
-    def _go_to_found(self) -> None:
-        lit = self.lit()
-        for nid in self.items:
-            if lit is not None and nid in lit and nid != self.current:
-                self.canvas.centerOn(self.items[nid])
-                return
+    def matches(self) -> list[str] | None:
+        """The nodes the search box finds, top to bottom, left to right; None without a
+        search. Every word must be in the node's name, kind, subtitle, value, badge or
+        state (SCH-6: "pass", "MPa", "out of date" and an operator's type find nodes)."""
+        from puzzle.project.status import WORDS
+
+        words = self.search.text().strip().lower().split()
+        if not words:
+            return None
+        found = []
+        for k, n in self.schematic.nodes.items():
+            hay = " ".join((n.label, sch.KIND_WORDS.get(n.kind, ""), n.subtitle, n.value,
+                            n.badge, WORDS.get(n.state, ""), n.verdict)).lower()  # fmt: skip
+            if all(w in hay for w in words):
+                found.append(k)
+
+        def place(k: str):
+            item = self.items.get(k)
+            return (item.pos().x(), item.pos().y()) if item is not None else (0.0, 0.0)
+
+        return sorted(found, key=place)
+
+    def _go_to_found(self, back: bool | None = None) -> str:
+        """Enter: the next match (Shift+Enter the one before), centred and selected; the
+        count beside the box says which of how many."""
+        from PySide6.QtWidgets import QApplication
+
+        found = self.matches() or []
+        if back is None:
+            back = bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if not found:
+            self.found.setText("none" if self.search.text().strip() else "")
+            return ""
+        at = found.index(self.current) if self.current in found else -1
+        nid = found[(at - 1) % len(found)] if back else found[(at + 1) % len(found)]
+        self.found.setText(f"{found.index(nid) + 1} of {len(found)}")
+        if nid in self.items:
+            self.canvas.centerOn(self.items[nid])
+            self.chosen(self.items[nid].node)
+            self.search.setFocus()
+        return nid
+
+    def _searched(self) -> None:
+        found = self.matches()
+        self.found.setText("" if found is None else (f"{len(found)} found" if found
+                                                       else "none"))  # fmt: skip
+        self.highlight()
 
     def tidy_layout(self) -> None:
         from puzzle.schematic import view_state
@@ -885,13 +1275,15 @@ class SchematicPanel(QWidget):
         component, offered as a new part of it."""
         from puzzle.schematic import view_state
 
+        moved = [i for i in self.items.values() if i.isSelected() or i is item]
         target = self._node_under(item.sceneBoundingRect().center(), not_item=item)
-        if target is not None and self._linkable(item.node, target.node):
+        if len(moved) == 1 and target is not None and self._linkable(item.node, target.node):
             item.setPos(start)  # dropped on what it can be used by: wire it in
             self.link(item.node, target.node)
             return
-        pos = item.pos()
-        self.view.positions[item.node.id] = (round(pos.x(), 1), round(pos.y(), 1))  # as saved
+        for each in moved:  # every selected node went with it (SCH-UX-1)
+            pos = each.pos()
+            self.view.positions[each.node.id] = (round(pos.x(), 1), round(pos.y(), 1))
         if self._root is not None:
             view_state.save(self._root, self.view)
 
@@ -914,6 +1306,76 @@ class SchematicPanel(QWidget):
         self.scene.addItem(path)
         self.drawing = (item, port, path)
         self.canvas.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.fits = self.sockets_for(item.node, port)
+        for each in self.items.values():  # SCH-UX-3: what takes it lit, the rest dimmed
+            each.update()
+
+    def sockets_for(self, node: sch.Node, port: str) -> dict:
+        """While a wire is drawn from `node`'s `port`: {node id: the input ports that
+        take it ("" for the node itself: a reference it can be used in)}, so those
+        sockets are lit and the rest dimmed (SCH-UX-3)."""
+        from uuid import UUID
+
+        from puzzle.operators import TYPES, accepts, output_type
+
+        project = self.window.session.project
+        source, port = unfold(node, port)
+        oid, oport = self.source_of(source, port)
+        given = None
+        if oid:
+            with contextlib.suppress(ValueError):
+                given = output_type(project, UUID(oid), oport)
+        out: dict[str, set] = {}
+        for nid, item in self.items.items():
+            if nid == node.id:
+                continue
+            target = item.node
+            if target.kind == "operator" and given is not None:
+                op = project.objects.get(UUID(target.object))
+                if op is not None:
+                    keys = {p.key for p in TYPES[op.type].ports_for(op) if accepts(p, given)}
+                    if keys:
+                        out[nid] = keys
+            elif source.kind == "study" and target.kind == "study":
+                out[nid] = {""}  # a transfer
+            elif source.kind in ("operator", "parameters") and target.kind in ("geometry", "study"):
+                out[nid] = {""}  # a history argument, a sweep
+            elif source.kind != "operator" and self._linkable(source, target):
+                out[nid] = {""}
+        return out
+
+    def socket_lit(self, node_id: str, key: str, side: str):
+        """None when no wire is being drawn; else whether this socket takes it (an input
+        that accepts it, or any input of a node it can be used in)."""
+        fits = getattr(self, "fits", None)
+        if fits is None:
+            return None
+        if side != "in":
+            return None
+        found = fits.get(node_id, set())
+        return key in found or "" in found
+
+    def refusal(self, target: NodeItem, point: QPointF) -> str:
+        """Why the input under a dragged wire won't take it, in words; "" when it will."""
+        from uuid import UUID
+
+        from puzzle.operators import TYPE_WORDS, TYPES, accepts, output_type
+
+        if self.drawing is None or target.node.kind != "operator":
+            return ""
+        item, port, _ = self.drawing
+        key = target.input_near(point)
+        if key is None:
+            return ""
+        project = self.window.session.project
+        oid, oport = self.source_of(*unfold(item.node, port))
+        op = project.objects.get(UUID(target.node.object))
+        spec = TYPES[op.type].input(key) if op is not None else None
+        given = output_type(project, UUID(oid), oport) if oid else None
+        if spec is None or given is None or accepts(spec, given):
+            return ""
+        takes = " or ".join(TYPE_WORDS[t].lower() for t in spec.types)
+        return f"{spec.label} takes a {takes}; this is a {TYPE_WORDS[given].lower()}"
 
     def wire_to(self, point: QPointF) -> None:
         item, port, path = self.drawing
@@ -922,16 +1384,31 @@ class SchematicPanel(QWidget):
         bend = max(40.0, abs(point.x() - p0.x()) / 2)
         shape.cubicTo(p0.x() + bend, p0.y(), point.x() - bend, point.y(), point.x(), point.y())
         path.setPath(shape)
+        over = self._node_under(point, not_item=item)
+        why = self.refusal(over, point) if over is not None else ""
+        if why:
+            self.window.statusBar().showMessage(why, 3000)
 
     def end_wire(self, point: QPointF) -> None:
         item, port, path = self.drawing
         self.drawing = None
         self.scene.removeItem(path)
-        self.canvas.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.canvas.setDragMode(self.canvas.MODE)
+        self.fits = None
+        for each in self.items.values():
+            each.update()
         target = self._node_under(point, not_item=item)
         if target is None:
             if item.node.kind == "component":  # dragged out to the canvas: a new study
                 self.study_from(item.node)
+                return
+            # SCH-UX-3: let go on nothing, the palette there, what fits first, wired in
+            source, sport = self.source_of(*unfold(item.node, port))
+            if source and self.window.session is not None:
+                from puzzle.gui import operators
+
+                return operators.open_palette(self.window, (point.x(), point.y()), source,
+                                              sport)  # fmt: skip
             return
         source, port = unfold(item.node, port)  # a folded cluster: its member's port
         into, key = unfold(target.node, target.input_near(point))
@@ -983,7 +1460,16 @@ class SchematicPanel(QWidget):
         specs = TYPES[op.type].ports_for(op)
         chosen = next((p for p in specs if p.key == key), None)
         if chosen is None or not accepts(chosen, given):
-            chosen = next((p for p in specs if accepts(p, given)), None)
+            fits = [p for p in specs if accepts(p, given)]
+            # SCH-4: off the row of an input, only an open one is taken; a wired one is
+            # replaced only when the wire is let go on its own row.
+            chosen = next((p for p in fits if _open(op, p.key)), None)
+            if chosen is None and fits:
+                names = ", ".join(p.label for p in fits)
+                self.window.statusBar().showMessage(
+                    f"{op.name}'s {names} {'is' if len(fits) == 1 else 'are'} set already "
+                    "(wired or typed): let go on its row to replace it", 8000)  # fmt: skip
+                return None
         if chosen is None:
             self.window.statusBar().showMessage(
                 f"{op.name} takes no {TYPE_WORDS[given].lower()}", 8000)  # fmt: skip
@@ -1204,6 +1690,45 @@ class SchematicPanel(QWidget):
             menu.exec(at)
         return menu
 
+    def wire_removal(self, item) -> tuple[list[dict], str]:
+        """(commands, label) removing what a data wire stands for, or ([], why not)."""
+        from puzzle.schematic import links
+
+        target = item.b.node
+        return links.data_wire_removal(self.window.session.project, item.wire,
+                                       target.object, target.path)  # fmt: skip
+
+    def remove_wire(self, item) -> object:
+        """A data wire's Remove: one undoable command (SCH-2)."""
+        cmds, why = self.wire_removal(item)
+        if not cmds:
+            self.window.statusBar().showMessage(f"This wire can't be removed here: {why}", 8000)
+            return None
+        return self.window.submit_batch(cmds) if len(cmds) > 1 else self.window.submit(cmds[0])
+
+    def wire_menu(self, item, at=None) -> QMenu:
+        """A data wire's right-click (SCH-2): Remove what it carries, or go to an end."""
+        menu = QMenu(self.canvas)
+        menu.setToolTipsVisible(True)
+        cmds, label = self.wire_removal(item)
+        action = menu.addAction(label if cmds else "Remove")
+        if cmds:
+            action.triggered.connect(lambda _=False: self.remove_wire(item))
+        else:
+            action.setEnabled(False)
+            action.setToolTip(f"Can't be removed here: {label}")
+        menu.addSeparator()
+        for words, end in (("Go to its source", item.a), ("Go to what it feeds", item.b)):
+            menu.addAction(f"{words}: {end.node.label}",
+                           lambda _=False, e=end: self._go_to(e))  # fmt: skip
+        if at is not None:
+            menu.exec(at)
+        return menu
+
+    def _go_to(self, item: NodeItem) -> None:
+        self.canvas.centerOn(item)
+        self.chosen(item.node)
+
     # --- New: what the tree can add ------------------------------------------------
 
     def fill_new_menu(self, menu: QMenu, at: QPointF | None = None) -> QMenu:
@@ -1235,15 +1760,334 @@ class SchematicPanel(QWidget):
 
     # --- the rest of the window ---------------------------------------------------
 
-    def chosen(self, node: sch.Node | None) -> None:
-        """A click: the node selected here and its object in the tree and Properties."""
+    def chosen(self, node: sch.Node | None, add: bool = False) -> None:
+        """A click: the node selected here and its object in the tree and Properties.
+        With `add` (Ctrl or Shift, or a drag of several) the rest stay selected and the
+        tree follows the last one clicked (SCH-UX-1)."""
+        self._syncing = True
+        try:
+            if add and node is not None:
+                item = self.items.get(node.id)
+                if item is not None:
+                    item.setSelected(True)
+            else:
+                for nid, item in self.items.items():
+                    item.setSelected(node is not None and nid == node.id)
+                for w in self.wires:
+                    w.setSelected(False)
+        finally:
+            self._syncing = False
         self.current = node.id if node is not None else ""
-        for nid, item in self.items.items():
-            item.setSelected(nid == self.current)
         self.highlight()
         self.selected.emit(self.current)
         if node is not None:
             self.window.select_in_tree(self._tree_key(node))
+
+    def selection(self) -> list[str]:
+        """The selected nodes' ids, the one clicked last at the end."""
+        found = [nid for nid, item in self.items.items() if item.isSelected()]
+        if self.current in found:
+            found.remove(self.current)
+            found.append(self.current)
+        return found
+
+    def _scene_selected(self) -> None:
+        """A rubber band (or Qt's own Ctrl-click) changed the selection."""
+        if getattr(self, "_syncing", False) or self.drawing is not None:
+            return
+        found = self.selection()
+        if self.current not in found:
+            self.current = found[-1] if found else ""
+            self.highlight()
+            self.selected.emit(self.current)
+
+    # --- keys (SCH-UX-1) ------------------------------------------------------------
+
+    def key(self, pressed: tuple) -> bool:
+        """A key the canvas keeps (`CANVAS_KEYS`); True when it did something."""
+        k, mods = pressed
+        ctrl = mods == Qt.KeyboardModifier.ControlModifier
+        plain = mods == Qt.KeyboardModifier.NoModifier
+        if self.window.session is None:
+            return False
+        if plain and k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.delete_selection()
+        elif ctrl and k == Qt.Key.Key_A:
+            self.select_all()
+        elif ctrl and k == Qt.Key.Key_C:
+            self.copy_selection()
+        elif ctrl and k == Qt.Key.Key_V:
+            self.paste()
+        elif ctrl and k == Qt.Key.Key_D:
+            self.copy_selection()
+            self.paste()
+        elif ctrl and k == Qt.Key.Key_F:
+            self.search.setFocus()
+            self.search.selectAll()
+        elif plain and k in (Qt.Key.Key_F, Qt.Key.Key_Home):
+            self.fit_all()
+        elif mods == Qt.KeyboardModifier.ShiftModifier and k == Qt.Key.Key_F:
+            self.fit_selection()
+        elif plain and k == Qt.Key.Key_Escape:
+            self.chosen(None)
+        elif plain and k in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self.step_along(forward=k == Qt.Key.Key_Right)
+        else:
+            return False
+        return True
+
+    def select_all(self) -> None:
+        self._syncing = True
+        try:
+            for item in self.items.values():
+                item.setSelected(True)
+        finally:
+            self._syncing = False
+        self._scene_selected()
+
+    def fit_selection(self) -> None:
+        chosen = [self.items[n] for n in self.selection()]
+        if not chosen:
+            return self.fit_all()
+        rect = chosen[0].sceneBoundingRect()
+        for item in chosen[1:]:
+            rect = rect.united(item.sceneBoundingRect())
+        self.canvas.fitInView(rect.adjusted(-40, -40, 40, 40), Qt.AspectRatioMode.KeepAspectRatio)
+        if self.canvas.transform().m11() > 1.0:
+            self.canvas.resetTransform()
+            self.canvas.centerOn(rect.center())
+        return None
+
+    def step_along(self, forward: bool) -> None:
+        """Right: the first node the selection feeds; Left: the first it is fed by."""
+        if not self.current:
+            return
+        ends = [w.target if forward else w.source for w in self.schematic.wires
+                if (w.source if forward else w.target) == self.current
+                and w.kind in ("data", "use")]  # fmt: skip
+        ends = [e for e in ends if e in self.items]
+        if ends:
+            ends.sort(key=lambda e: self.items[e].pos().y())
+            self._go_to(self.items[ends[0]])
+
+    def _tree_nodes(self, ids) -> list:
+        """The tree's items standing for these nodes, for `gui.deleting.plan`: never a
+        run node (its study's runs: deleted from the tree, one by one) or a file."""
+        from puzzle.gui.tree import Node as TreeNode
+
+        out = []
+        for nid in ids:
+            node = self.schematic.nodes.get(nid)
+            if node is None or node.kind in ("runs", "file"):
+                continue
+            kind, obj, *path = self._tree_key(node)
+            out.append(TreeNode(kind, object=obj, path=path[0] if path else "",
+                                label=node.label))  # fmt: skip
+        return out
+
+    def delete_selection(self):
+        """Delete what is selected here as one batch, one undo (SCH-UX-1): the nodes as
+        the tree deletes them; with no node selected, the selected wires' references."""
+        from puzzle.gui import deleting
+
+        project = self.window.session.project
+        ids = self.selection()
+        cmds: list = []
+        names: list[str] = []
+        if ids:
+            plan = deleting.plan(project, self._tree_nodes(ids))
+            cmds, names = list(plan.commands), list(plan.names)
+            skipped = [self.schematic.nodes[n].label for n in ids
+                       if self.schematic.nodes[n].kind in ("runs", "file")]  # fmt: skip
+            if skipped and not cmds:
+                self.window.statusBar().showMessage(
+                    "Results and files are deleted from the Model tab, not here", 8000
+                )
+                return None
+        else:
+            for w in [w for w in self.wires if w.isSelected()]:
+                if w.wire.kind == "use":
+                    source, target = self._objects(w.a.node, w.b.node)
+                    if source is None or target is None:
+                        continue
+                    from puzzle.schematic import links
+
+                    within = w.b.node.path if w.b.node.kind == "feature" else ""
+                    for c in links.existing(project, source.id, target, within):
+                        cmds += links.clear_commands(c, target)[:1]
+                        names.append(c.label)
+                else:
+                    found, label = self.wire_removal(w)
+                    cmds += found
+                    names += [label] if found else []
+        if not cmds:
+            return None
+        if len(names) > 1 and not self.window.ask_yes("Delete", deleting.question(
+                deleting.Plan(cmds, [], names))):  # fmt: skip
+            return None
+        done = self.window.submit_batch(cmds) if len(cmds) > 1 else self.window.submit(cmds[0])
+        if done is not None:
+            what = names[0] if len(names) == 1 else f"{len(names)} items"
+            self.window.statusBar().showMessage(f"Deleted {what}; Undo brings it back", 8000)
+        return done
+
+    def copy_selection(self) -> int:
+        """The selected operators, kept to paste (Ctrl+C); how many."""
+        from uuid import UUID
+
+        from puzzle.operators import clusters
+
+        project = self.window.session.project
+        ids = []
+        for nid in self.selection():
+            node = self.schematic.nodes.get(nid)
+            if node is not None and node.kind == "operator":
+                ids.append(UUID(node.object))
+        global _CLIPBOARD
+        _CLIPBOARD = clusters.copied(project, ids)
+        positions = {o["id"]: self.items[o["id"]].pos() for o in _CLIPBOARD
+                     if o["id"] in self.items}  # fmt: skip
+        self._copied_at = {k: (p.x(), p.y()) for k, p in positions.items()}
+        if not _CLIPBOARD and ids == []:
+            self.window.statusBar().showMessage("Only operators are copied here", 6000)
+        return len(_CLIPBOARD)
+
+    def paste(self):
+        """Copies of what Ctrl+C kept, with the wires among them, as one batch; placed
+        beside the originals (SCH-UX-1)."""
+        from puzzle.operators import clusters
+        from puzzle.schematic import view_state
+
+        if not _CLIPBOARD:
+            return None
+        cmds, new = clusters.paste_commands(self.window.session.project, _CLIPBOARD)
+        at = getattr(self, "_copied_at", {})
+        for old, made in new.items():
+            if old in at:
+                x, y = at[old]
+                self.view.positions[made] = (round(x + 40, 1), round(y + 40, 1))
+        if self._root is not None:
+            view_state.save(self._root, self.view)
+        done = self.window.submit_batch(cmds) if len(cmds) > 1 else self.window.submit(cmds[0])
+        if done is not None:
+            self._syncing = True
+            for item in self.items.values():
+                item.setSelected(item.node.id in new.values())
+            self._syncing = False
+            self._scene_selected()
+        return done
+
+    # --- editing on the node (SCH-UX-2) ---------------------------------------------
+
+    def edit_on_node(self, item: NodeItem, row) -> bool:
+        """A double-click on a typed input's row or an operator's value row: a line edit
+        over it, its text committed with Enter as one Edit (Esc leaves it). True when it
+        opened one."""
+        from uuid import UUID
+
+        from puzzle.gui.operators import _typed_text
+        from puzzle.operators import TYPES
+
+        node = item.node
+        if node.kind != "operator" or self.window.session is None:
+            return False
+        op = self.window.session.project.objects.get(UUID(node.object))
+        if op is None:
+            return False
+        if row.kind == "in":
+            spec = TYPES[op.type].input(row.key)
+            inp = op.inputs.get(row.key)
+            if spec is None or not spec.typed or (inp is not None and inp.source is not None):
+                return False
+            text = _typed_text(inp.value) if inp is not None and inp.value is not None else ""
+            self._inline(item, row, text, lambda typed: self._commit_typed(op, row.key, typed))
+            return True
+        if row.kind == "value" and op.type == "expression":  # a Formula's own text
+            self._inline(item, row, op.expression or "",
+                         lambda text: self._commit_setting(op, "expression", text))  # fmt: skip
+            return True
+        return False
+
+    def _inline(self, item: NodeItem, row, text: str, commit) -> None:
+        from PySide6.QtWidgets import QGraphicsProxyWidget
+
+        editor = QLineEdit(text)
+        editor.setFrame(True)
+        proxy = QGraphicsProxyWidget(item)
+        proxy.setWidget(editor)
+        proxy.setGeometry(QRectF(8, row.top, item.w - 16, max(row.height, 20)))
+        proxy.setZValue(10)
+        self.inline = editor
+        done = {"once": False}
+
+        def finish(save: bool) -> None:
+            if done["once"]:
+                return
+            done["once"] = True
+            value = editor.text()
+            self.inline = None
+            proxy.setWidget(None)
+            editor.deleteLater()
+            if proxy.scene() is not None:
+                proxy.scene().removeItem(proxy)
+            if save and value != text:
+                commit(value)
+
+        editor.returnPressed.connect(lambda: finish(True))
+        editor.editingFinished.connect(lambda: finish(False))
+        editor._finish = finish  # tests and Esc
+        editor.setFocus()
+        editor.selectAll()
+
+    def _commit_typed(self, op, key: str, text: str):
+        from puzzle.commands.model import Edit, EditOp
+        from puzzle.gui.operators import parse_typed
+
+        try:
+            typed = parse_typed(text)
+        except ValueError as exc:
+            self.window.statusBar().showMessage(f"{op.name}: {exc}", 8000)
+            return None
+        value = {} if typed is None else {"value": typed}
+        return self.window.submit(Edit(object=str(op.id), ops=[EditOp(
+            op="set", path=f"inputs.{key}", value=value)]))  # fmt: skip
+
+    def _commit_setting(self, op, field: str, text: str):
+        from puzzle.commands.model import Edit, EditOp
+
+        return self.window.submit(Edit(object=str(op.id), ops=[EditOp(
+            op="set", path=field, value=text)]))  # fmt: skip
+
+    # --- Bring up to date (SCH-UX-8) ------------------------------------------------
+
+    def needs_running(self) -> list[str]:
+        """The studies to run to bring the selection (or everything an operator reads,
+        with nothing selected) up to date: those not current, in the order they run."""
+        s = self.schematic
+        ids = self.selection()
+        if ids:
+            reach = set(ids)
+            for nid in ids:
+                reach |= s.upstream(nid)
+        else:
+            reach = set(s.nodes)
+        out = []
+        for nid in reach:
+            node = s.nodes.get(nid)
+            if node is not None and node.kind == "study" and node.state in (
+                    "out_of_date", "not_run", "failed"):  # fmt: skip
+                out.append(node.object)
+        return out
+
+    def bring_up_to_date(self):
+        """Run what the selection needs (the run queue: sources of transfers first). It
+        is asked for, never automatic: a solve can take hours."""
+        studies = self.needs_running()
+        if not studies:
+            self.window.statusBar().showMessage("Everything shown is up to date", 6000)
+            return []
+        self.window.run_studies(studies)
+        return studies
 
     def _tree_key(self, node: sch.Node) -> tuple[str, str]:
         """(tree node kind, its object) for a schematic node; a file is its reader's."""
@@ -1345,19 +2189,18 @@ class SchematicSide(QWidget):
 
         self.panel = panel
         column = QVBoxLayout(self)
-        title = theme.role(QLabel("Schematic"), "title")
-        column.addWidget(title)
-        legend = QLabel(
-            "Thick coloured wires carry results (transfers, imported fields, runs into "
-            "derived results), coloured by what flows. Thin grey wires say what each "
-            "thing is built from.\n\nClick a node to select it; double-click to open it; "
-            "right-click for its menu. Drag a study's output onto another study to make a "
-            "transfer, a geometry onto a component to add a part.\n\nOperators compute "
-            "from results: press Tab (or double-click the empty canvas) to add one, wired "
-            "from the selected node; drag any output onto an operator's input to wire it. "
-            "Socket shapes say what a port carries: circles results and fields, diamonds "
-            "numbers, squares tables, triangles verdicts."
-        )
+        head = QHBoxLayout()
+        head.addWidget(theme.role(QLabel("Schematic"), "title"))
+        head.addStretch(1)
+        self.help_button = QToolButton(text="?")  # UX-35: the help page, not a page of text
+        self.help_button.setToolTip("How to read and use the schematic: wires, sockets, "
+                                    "states, keys (F1)")  # fmt: skip
+        self.help_button.setAccessibleName("Schematic help")
+        self.help_button.clicked.connect(lambda: self.open_help())
+        head.addWidget(self.help_button)
+        column.addLayout(head)
+        legend = QLabel("Click a node: what it is built from and what a change to it "
+                        "reaches. Tab adds an operator.")  # fmt: skip
         legend.setWordWrap(True)
         theme.role(legend, "muted")
         column.addWidget(legend)
@@ -1368,6 +2211,11 @@ class SchematicSide(QWidget):
         column.addWidget(self.details)
         column.addStretch(1)
         panel.selected.connect(self.show_node)
+
+    def open_help(self):
+        from puzzle.gui.help_viewer import show_help
+
+        return show_help(self.panel.window, "panel:schematic")
 
     def show_node(self, node_id: str) -> None:
         from puzzle.project.status import WORDS
@@ -1386,4 +2234,33 @@ class SchematicSide(QWidget):
             f"{sch.KIND_WORDS.get(node.kind, node.kind)}: {node.label}\n{state}\n\n"
             f"Built from: {names(s.upstream(node_id))}\n\n"
             f"A change reaches: {names(s.downstream(node_id))}"
+            + (f"\n\n{cost}" if (cost := self.cost(node_id)) else "")
         )
+
+    def cost(self, node_id: str) -> str:
+        """What a change to the node would cost (SCH-UX-13): the studies it would put
+        out of date, with their last solve's time, and the operators worked out again."""
+        s = self.panel.schematic
+        reach = s.downstream(node_id)
+        studies = sorted((s.nodes[k] for k in reach if s.nodes[k].kind == "study"),
+                         key=lambda n: n.label)  # fmt: skip
+        ops = sum(1 for k in reach if s.nodes[k].kind == "operator")
+        if not studies and not ops:
+            return ""
+        runs = getattr(self.panel.window, "run_records", None) or []
+        last: dict[str, float] = {}
+        for r in sorted(runs, key=lambda r: r.recorded_at):
+            last[r.study_id] = r.duration_s
+        timed = [f"{n.label}, last solve {_seconds(last[n.object])}" if n.object in last
+                 else n.label for n in studies]  # fmt: skip
+        parts = []
+        if studies:
+            word = "study" if len(studies) == 1 else "studies"
+            parts.append(f"{len(studies)} {word} out of date ({'; '.join(timed)})")
+        if ops:
+            parts.append(f"{ops} operator{'s' if ops != 1 else ''} worked out again")
+        return "A change here puts " + " and ".join(parts)
+
+
+def _seconds(t: float) -> str:
+    return f"{t:.0f} s" if t < 120 else f"{t / 60:.0f} min"

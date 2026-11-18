@@ -622,6 +622,13 @@ class PropertiesPanel(QTreeWidget):
                 if key == "values" and isinstance(node, dict) and _is_feature(node):
                     item.setExpanded(True)
                 continue
+            if key == "type" and isinstance(node, dict) and _is_operator(node):
+                from puzzle.operators import TYPES  # SCH-7: its name as the node says it
+
+                found = TYPES.get(value)
+                item = QTreeWidgetItem(parent, [title, found.label if found else str(value)])
+                item.setToolTip(1, "An operator keeps its type: add another to change it")
+                continue
             options = None if key in READ_ONLY else self.choices(sub)
             if options is None and isinstance(value, bool):
                 options = [("Yes", True), ("No", False)]

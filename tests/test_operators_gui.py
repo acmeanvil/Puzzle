@@ -111,6 +111,7 @@ def test_the_palette_makes_a_reduce_wired_from_the_selected_results(window):
     palette._make()
     op = _op(w, "Result summary 1")
     assert op.inputs["result"].source == _study(w).id and op.inputs["result"].port == "result"
+    w.schematic.wait()  # values are worked out off the GUI thread (ADR 0090 package 13)
     node = w.schematic.items[str(op.id)].node
     assert node.value.endswith(" mm") and node.state == "up_to_date"  # the tip deflection
     assert w.tree.current().object == str(op.id)  # selected, so Properties shows it
@@ -131,10 +132,12 @@ def test_a_check_with_a_typed_limit_turns_red_then_green(window):
     w.select_in_tree(("object", check_id))
     row = _rows(w)["Typed value"]
     row.setText(1, "0.001 mm")  # far less than the tip moves
+    w.schematic.wait()
     node = w.schematic.items[check_id].node
     assert node.verdict == "fail" and node.value.startswith("Fail, margin -")
     w.select_in_tree(("object", check_id))
     _rows(w)["Typed value"].setText(1, "100 mm")
+    w.schematic.wait()
     assert w.schematic.items[check_id].node.verdict == "pass"
     _rows(w)["Typed value"].setText(1, "12 wibbles")  # not a unit: put back, nothing changed
     assert _op(w, "Check against limit 1").inputs["limit"].value.unit == "mm"
@@ -149,6 +152,7 @@ def test_a_wire_drawn_onto_an_operator_wires_it(window):
     w.schematic.end_wire(target.sceneBoundingRect().center())
     op = _op(w, "Result summary 1")
     assert op.inputs["result"].port == "stress"
+    w.schematic.wait()
     assert w.schematic.items[op_id].node.value.endswith(" MPa")  # von Mises, its first
     wires = [x for x in w.schematic.wires if x.b is w.schematic.items[op_id]]
     assert len(wires) == 1 and wires[0].wire.target_port == "result"
@@ -471,5 +475,6 @@ def test_an_input_says_which_run_it_reads_and_a_stale_one_shows(window):
         )
     )
     w.schematic.refresh()
+    w.schematic.wait()
     node = w.schematic.items[reduce_id].node
     assert "stale: from the run of Tip load" in node.value and node.state == "out_of_date"

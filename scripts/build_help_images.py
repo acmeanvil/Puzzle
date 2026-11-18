@@ -188,6 +188,7 @@ def draw_operators(window, pictures) -> None:
     window.refresh()
     panel = window.schematic
     panel.refresh()
+    panel.wait()  # the values are worked out on a worker (ADR 0090 package 13)
     folder = pictures.IMAGES / "operator"
     shutil.rmtree(folder, ignore_errors=True)
     folder.mkdir(parents=True)
@@ -282,6 +283,7 @@ def draw_screens(app, window, pictures) -> None:
     window.refresh()
     panel = window.schematic
     panel.refresh()
+    panel.wait()
     app.processEvents()
     scene_picture(panel, panel.scene.itemsBoundingRect()).save(str(folder / "schematic.png"))
     # The chain alone, large enough to read on a page: the study, then its operators.

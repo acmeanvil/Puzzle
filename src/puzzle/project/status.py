@@ -59,18 +59,19 @@ def worst(states) -> str:
 
 
 def status(project: Project, runs=(), running=frozenset(), failed=frozenset(),
-           root=None) -> dict[str, State]:  # fmt: skip
+           root=None, keys=None) -> dict[str, State]:  # fmt: skip
     """Object id -> its state. `runs` are the store's records (completed runs only);
     `running` and `failed` are study ids the GUI knows about (a failed run isn't
     stored). Files resolve against `root` (default: where the project was loaded
-    from), as a run's keys do."""
+    from), as a run's keys do; `keys` are `graph.run_hashes` when worked out already."""
     from puzzle.project.graph import run_hashes
 
     problems: dict[str, list[str]] = {}
     for p in project.problems():
         problems.setdefault(p.object, []).append(p.message)
     used = {a.material for c in project.of_type(Component) for a in c.materials}
-    keys = run_hashes(project, root)
+    if keys is None:
+        keys = run_hashes(project, root)
     out: dict[str, State] = {}
     for obj in project.objects.values():
         found = problems.get(obj.name)
@@ -152,15 +153,18 @@ def _study(study: Study, keys: dict[str, list[str]], runs, running, failed) -> S
     return State("out_of_date", "the model changed since the last run")
 
 
-def run_state(record, project: Project, root=None) -> State:
+def run_state(record, project: Project, root=None, keys=None) -> State:
     """A stored run against the model as it is now: a convergence level or an adaptive
-    pass is current while the study's own key is (`graph.variant`)."""
+    pass is current while the study's own key is (`graph.variant`). `keys` are
+    `graph.run_hashes`, when worked out already (one per refresh, not one per run)."""
     from puzzle.project.graph import base_key, run_hashes
 
     study = next((s for s in project.of_type(Study) if str(s.id) == record.study_id), None)
     if study is None:
         return State("out_of_date", "its study is gone")
-    keys = {k for ks in run_hashes(project, root).get(study.id, {}).values() for k in ks}
+    if keys is None:
+        keys = run_hashes(project, root)
+    keys = {k for ks in keys.get(study.id, {}).values() for k in ks}
     if base_key(record.run_key) in keys:
         return State("up_to_date")
     return State("out_of_date", "the model changed since this run")

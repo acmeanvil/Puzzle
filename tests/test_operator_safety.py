@@ -145,6 +145,7 @@ def test_a_project_whose_formula_raises_opens_in_the_window(tmp_path):
     try:
         w.refresh()
         w.schematic.refresh()
+        w.schematic.wait()  # worked out off the GUI thread (ADR 0090 package 13)
         node = next(i.node for i in w.schematic.items.values() if i.node.label == "Big")
         assert "too large" in node.value
     finally:

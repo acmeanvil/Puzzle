@@ -480,6 +480,12 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   user operators as folded blocks with their own sockets and shared as files, numbers
   wired into a feature's value, the Report node. The rest built 2026-11-13: a study
   dragged out of a component, "evaluate up to here", Plot of any number of curves.
+- Schematic left by ADR 0090 package 13: the scene updated by what changed, not redrawn;
+  mute (a stored `Operator.muted`), notes and frame colours, Ctrl+G, F2 in place,
+  dropdowns on a node, moving a wire's end, long wires routed, live sliders off the GUI
+  thread; the operator merges and logic operators (OP-NEW-1, 2, 9: new or aliased
+  `Operator.type` values) and OP-NEW-4 to 8, 10 to 12; list → curve and list → number;
+  `derived.run_for` reading a study's current run before its newest.
 
 ### 9. Agent and MCP
 

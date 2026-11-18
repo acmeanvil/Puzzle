@@ -308,7 +308,7 @@ def test_the_schematic_draws_operators_with_typed_ports_and_values(si_units, set
     runs = list(ctx.store.runs())
     s = sch.build(p, runs, store=ctx.store)
     node = s.nodes[str(check.id)]
-    assert node.kind == "operator" and node.subtitle == "Check against limit"
+    assert node.kind == "operator" and node.subtitle.startswith("Check against limit")
     assert node.column == sch.RESULTS
     assert [(x.key, x.side, x.type) for x in node.ports] == [
         ("out", "out", "verdict"), ("margin", "out", "number"),

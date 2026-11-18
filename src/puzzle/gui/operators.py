@@ -600,8 +600,16 @@ def fitting(window, source: str | None, port: str = "out") -> list[str]:
     given = output_type(window.session.project, UUID(source), port)
     if given is None:
         return []
-    return [t.key for t in TYPES.values() if t.inputs and any(accepts(p, given)
-                                                               for p in t.inputs)]  # fmt: skip
+    found = [t for t in TYPES.values() if t.inputs and any(accepts(p, given) for p in t.inputs)]
+
+    def rank(t) -> int:  # SCH-UX-15: what reads it first, before what merely could
+        first = next((p for p in t.inputs if p.required), t.inputs[0])
+        return 0 if accepts(first, given) else 1 if accepts(t.inputs[0], given) else 2
+
+    return [t.key for t in sorted(found, key=rank)]  # stable: the registry's order within
+
+
+FITS_SHOWN = 8
 
 
 def recent(window) -> list[str]:
@@ -636,8 +644,8 @@ class Palette(QDialog):
         fits = fitting(window, source, port)
         used = [k for k in recent(window) if k in TYPES]
         sections = []
-        if fits:
-            sections.append(("Fits here", [TYPES[k] for k in fits]))
+        if fits:  # the eight that fit best; the rest are under Every operator (SCH-UX-15)
+            sections.append(("Fits here", [TYPES[k] for k in fits[:FITS_SHOWN]]))
         if used:
             sections.append(("Recently used", [TYPES[k] for k in used]))
         sections.append(("Every operator", ordered()))
@@ -664,10 +672,35 @@ class Palette(QDialog):
         column.addWidget(self.help)
         self._filter("")
         self.resize(360, 380)
+        self.search.installEventFilter(self)  # SCH-8: Up and Down move the choice
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt's name
+        """Up, Down, Page Up and Page Down typed in the search box move the list's
+        choice, so the palette is used from the keyboard alone (SCH-8)."""
+        from PySide6.QtCore import QEvent
+
+        keys = (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown)
+        if watched is self.search and event.type() == QEvent.Type.KeyPress and (
+                event.key() in keys):  # fmt: skip
+            self.step(event.key())
+            return True
+        return super().eventFilter(watched, event)
+
+    def step(self, key) -> None:
+        """The next shown, choosable row in the key's direction."""
+        rows = [i for i in range(self.list.count())
+                if not self.list.item(i).isHidden() and self.list.item(i).data(ROLE)]  # fmt: skip
+        if not rows:
+            return
+        now = self.list.currentRow()
+        at = rows.index(now) if now in rows else -1
+        jump = {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1, Qt.Key.Key_PageUp: -8,
+                Qt.Key.Key_PageDown: 8}[key]  # fmt: skip
+        self.list.setCurrentRow(rows[min(max(at + jump, 0), len(rows) - 1)])
 
     def _filter(self, text: str) -> None:
         words = text.lower().split()
-        first = named = None
+        first = named = best = None
         shown: set[str] = set()
         for i in range(self.list.count()):
             item = self.list.item(i)
@@ -677,7 +710,8 @@ class Palette(QDialog):
                 continue
             t = TYPES[key]
             alias = next((a for a in t.aliases if words and all(w in a for w in words)), None)
-            hay = f"{t.label} {t.group} {t.help} {' '.join(t.aliases)}".lower()
+            initials = "".join(p[0] for p in t.label.lower().split() if p)  # "rs": Result summary
+            hay = f"{t.label} {t.group} {t.help} {' '.join(t.aliases)} {initials}".lower()
             hide = not all(w in hay for w in words) or (bool(words) and key in shown)
             item.setHidden(hide)
             item.setText(f"{t.label}  ·  {t.group}" + (f"   (as {alias})" if alias and
@@ -687,9 +721,14 @@ class Palette(QDialog):
             shown.add(key)
             if first is None:
                 first = item
+            starts = t.label.lower().split()
+            if best is None and words and (
+                    "".join(words) == initials or all(any(s.startswith(w) for s in starts)
+                                                      for w in words)):  # fmt: skip
+                best = item  # a name's word starts or initials come first (SCH-8)
             if named is None and all(w in t.label.lower() for w in words):
                 named = item  # a name that matches comes before a description that does
-        first = named or first
+        first = best or named or first
         if first is not None:
             self.list.setCurrentItem(first)
 

@@ -136,6 +136,22 @@ def _unbound(data):
     return data
 
 
+_DEFAULTS: dict[str, object] = {}
+
+
+def _operator_defaults() -> dict[str, object]:
+    """Each optional Operator field's default, found once: pydantic's `get_default`
+    inspects the factory's signature on every call, which was most of a schematic
+    refresh (ADR 0090 package 13, SCH-1). Only compared, never handed out."""
+    if not _DEFAULTS:
+        from puzzle.model.schema import Operator
+
+        _DEFAULTS.update({key: f.get_default(call_default_factory=True)
+                          for key, f in Operator.model_fields.items()
+                          if not f.is_required()})  # fmt: skip
+    return _DEFAULTS
+
+
 def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
     # A shoot-out never changes the primary solver's result, so it never stales it.
     exclude = {"name", *drop} | ({"shootout"} if isinstance(obj, Study) else set())
@@ -186,11 +202,8 @@ def _own(obj: ProjectObject, *, drop: frozenset[str] = frozenset()) -> dict:
             if key in data and data[key] == default:
                 data.pop(key)
     if obj.kind == "operator":  # settings at their defaults: adding one stales nothing
-        from puzzle.model.schema import Operator
-
-        for key, f in Operator.model_fields.items():
-            if key in data and not f.is_required() and data[key] == f.get_default(
-                    call_default_factory=True):  # fmt: skip
+        for key, default in _operator_defaults().items():
+            if key in data and data[key] == default:
                 data.pop(key)
         if data.get("layout") == "setting":  # read as long (ADR-E-7): older hashes kept
             data.pop("layout")

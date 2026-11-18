@@ -49,7 +49,7 @@ def test_the_schematic_carries_the_help(tmp_path):
     project = Project(name="p")
     project.add(Operator(name="Most", type="reduce"))
     node = next(n for n in sch.build(project, []).nodes.values() if n.kind == "operator")
-    assert node.subtitle == "Result summary" and "Result summary:" in node.help
+    assert node.subtitle.startswith("Result summary") and "Result summary:" in node.help
     port = node.port("result")
     assert port.help.startswith("Result: takes a result or field")
 

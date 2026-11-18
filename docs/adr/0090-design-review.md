@@ -800,6 +800,61 @@ Euler-Bernoulli) and fails at ten. The findings' tests are in
   preview (it uses `window.pending`, cleared on accept or reject only if no tool is
   open).
 
+**Package 13 built (2026-11-18):** Schematic. Tests in
+`tests/test_schematic_review.py` and `tests/test_operators_review.py`, on a project of 55
+nodes (`tests/schematic_project.py`: the cantilever, a stored run for each of its three
+studies, ten chains of number → result summary → check, a formula).
+
+- Done when, a refresh at 55 nodes under 100 ms: the panel's refresh fell from 205 ms
+  (median of five, offscreen) to 11 ms, build and layout from 114 ms to 3 ms. The test
+  holds the median of five builds and layouts under 100 ms, one build per refresh, and
+  nothing evaluated when nothing changed. Done when, no out-of-date verdict drawn as
+  current: with the load doubled after the runs all ten checks read stale, no node out
+  of date draws a pass or a fail, and the SVG holds no verdict colour.
+- SCH-1: a refresh builds once; `graph.run_hashes` is worked out once per window refresh
+  (`schematic.run_keys_of`) and shared by status, the tree, the build and the values
+  (seven times before); the operator defaults `graph._own` compares are found once
+  (pydantic's `get_default` was most of the cost). Values are worked out on a worker
+  (`schematic.values`, `fill`; `build(evaluate=False)` marks them "working"), cached by
+  content hashes, runs, display units and root, shared by both panels. Geometry readers
+  hold `occ_lock`; `evaluate._READ` is locked. Left: the scene is still cleared and
+  redrawn (9 to 13 ms); `Project.problems()` and Properties' Shows row still evaluate
+  before-solving operators on the GUI thread (package 14).
+- SCH-3, SCH-UX-8: `schematic.value_look` says how a value is drawn in the GUI and the
+  SVG: from a run no longer current muted, italic and marked, an error as an error, a
+  verdict's colour only when current. Titles are hatched amber when out of date and red
+  when failed or missing. Bring up to date runs what the selection needs, when asked.
+- SCH-2: a data wire has a menu and takes Delete: an operator's input, a transfer, a
+  sweep over an operator, a bound value (the value stays), an imported field's use, each
+  one undoable command (`links.data_wire_removal`); history arguments, optimisations and
+  derived results say where to change them instead.
+- SCH-4: a wire let go off a row takes the first open input that fits and never replaces
+  one; with none open it is refused, saying to let go on the row.
+- SCH-11, SCH-UX-1: a rubber band (panning is the middle button or Space), Ctrl or
+  Shift-click, several nodes dragged together, Delete as one batch, Ctrl+A, copy, paste
+  and duplicate of operator chains (`clusters.copied`, `paste_commands`), F and Home,
+  arrows along wires. Left: F2 in place, Ctrl+G, mute.
+- SCH-UX-2, 3: a typed input or a formula is edited on its node; while a wire is dragged
+  the sockets that take it are lit, and let go on nothing the palette opens with what
+  fits. Left: dropdowns on the node, moving a wire's end.
+- SCH-5 to 10, SCH-UX-4, 5, 10, 13, 15, UX-35, in part or whole: text shortened with its
+  whole value as the tooltip; search over names, values and states, stepped through; an
+  operator's Type by name, read-only; the palette from the keyboard, initials found; an
+  output's label follows its type; a component's joints counted; limits beside the
+  checks that read them; a node shows its wired inputs and one spare; a folded group
+  says "10 checks: 1 fail"; the side panel says what a change would put out of date and
+  is a help button, not a page; Fits here ranked and capped at eight.
+- OP-NEW-3 (a curve where a table is wanted), 13 (search words that found nothing), 14
+  (a subtitle says what the node does: "Result summary · maximum equivalent (von Mises)
+  stress on Bar/Root").
+- Left: SCH-UX-6, 7, 9 (mute: a stored field), 11, 12 (live sliders, against SCH-1), 14,
+  16 to 18; OP-NEW-1, 2 (merges) and 9 (logic), which change `Operator.type`'s stored
+  values; OP-NEW-4 to 8, 10 to 12; `derived.run_for` still reads a study's newest run,
+  not its current one. Seen: `gui.operators.parse_typed` refuses "5mm" without a space.
+- Not seen on a real screen: the rubber band and panning, hatched titles, lit sockets,
+  the edit on a node. Without a test of their own: removing a field's use, the redraw
+  put off while a wire is dragged, arrow keys along wires, Shift+F.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

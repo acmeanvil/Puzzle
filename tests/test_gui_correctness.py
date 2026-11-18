@@ -274,7 +274,7 @@ def test_the_tree_lists_result_tools_beside_swept_runs(window):
     import puzzle.project.status as status
 
     original = status.run_state
-    status.run_state = lambda r, p: None
+    status.run_state = lambda r, p, **_k: None
     try:
         window.tree.populate(window.session.project, [run], {}, {})
     finally:

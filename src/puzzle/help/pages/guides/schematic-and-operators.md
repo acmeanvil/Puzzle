@@ -27,6 +27,19 @@ along a wall, a table, a report.
    geometry or mesh recipe.
 5. A click selects the object in the tree and Properties; a double-click opens it where
    it is edited; a right-click gives the tree's own menu.
+6. A node's title says what will happen: hatched amber when it is out of date, tinted
+   red when it failed or misses an input, tinted green or red for a check that passes or
+   fails on current results. A value worked out from results that are no longer current
+   is drawn muted and in italics and says "(stale: …)" or "(out of date)": it is never
+   drawn in a verdict's colour. "working…" means the value is being worked out.
+7. **Bring up to date** runs the studies the selection needs (with nothing selected,
+   every study shown that is not current), sources of transfers first. Nothing is
+   solved until you ask.
+8. Select a node to see, beside the canvas, what a change to it would cost: the studies
+   it would put out of date with their last solve's time, and the operators.
+9. **Find** (Ctrl+F) searches names, kinds, values, states and an operator's type
+   ("pass", "MPa", "out of date", "result summary"); Enter goes to the next match and
+   Shift+Enter to the one before.
 
 ![The cantilever example's schematic: its geometry file, resources, loads and component in columns, its three studies, and a Result summary and a Check against limit wired from Tip load's stress](image:screens/schematic.png)
 
@@ -40,10 +53,27 @@ along a wall, a table, a report.
 3. Draw a wire from a study's output onto another study to make a transfer (a
    temperature into a structural study). Drop a geometry on a component to add it as a
    part.
-4. Right-click a wire to remove what it stands for. A reference an object can't be
-   without (a study's component) is refused: wire another in to replace it.
-5. Dragging a node only moves it. Positions are yours, kept outside the project;
-   **Tidy layout** forgets them.
+4. Right-click a wire to remove what it stands for: a reference, an operator's input, a
+   transfer, a sweep over an operator, a value following a parameter, an imported
+   field's use. Each is one change Undo takes back. A reference an object can't be
+   without (a study's component) is refused: wire another in to replace it. A history
+   argument naming a parameter is changed in its step.
+5. While a wire is drawn, the sockets that take it are lit and the rest dimmed; over one
+   that won't take it the status bar says why. Let go on a node's title and the first
+   empty input that takes it is used: one already wired or typed is replaced only when
+   you let go on its own row. Let go on the empty canvas and the palette opens there,
+   what fits first, the new operator wired in.
+6. Drag the empty canvas to choose several nodes; Ctrl- or Shift-click adds one. Pan
+   with the middle button, or Space and drag. Keys while the canvas has the focus:
+   Delete (one change, one Undo), Ctrl+A, Ctrl+C and Ctrl+V (copies of the chosen
+   operators, wired among themselves and reading what the originals read), Ctrl+D,
+   F or Home (fit all), Shift+F (fit the selection), Left and Right (along the wires),
+   Esc.
+7. Double-click a typed input's row ("Limit: 235 MPa") or a Formula's value to edit it on
+   the node; Enter keeps it, Esc leaves it.
+8. Dragging a node only moves it (several chosen move together). Positions are yours,
+   kept outside the project; **Tidy layout** forgets them. A limit or allowable that
+   only checks read sits beside them in Results, not with the parameters.
 
 ## How to add an operator
 

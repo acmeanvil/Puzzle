@@ -462,3 +462,7 @@ and Freeze (A15). Not done:
 - A cell click filtering in the Table viewer.
 - Hashing a File operator's files.
 - Running a study that a table from another study's run feeds.
+
+## Amended (2026-11-18, ADR 0090 package 13)
+
+A curve is taken where a table is wanted, as its x and y columns (`accepts`, `evaluate._input`).

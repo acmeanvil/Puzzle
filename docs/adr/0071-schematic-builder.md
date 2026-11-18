@@ -329,3 +329,6 @@ names, units and no raw data on view.
   from the schematic (values wired to parameters), live nodes (values, verdicts, small
   plots, stale states from ADR 0033, the Report).
 
+## Amended (2026-11-18, ADR 0090 package 13)
+
+An output whose type follows its inputs is labelled by that type (a Safety factor of two numbers gives "Number"). Loads of one title on two components name their component. A folded group of checks says how many fail.

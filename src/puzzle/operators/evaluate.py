@@ -28,6 +28,7 @@ from __future__ import annotations
 import csv
 import io
 import math
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -317,16 +318,21 @@ class Context:
 
 
 _READ: dict[tuple[str, str], tuple] = {}
+_READ_LOCK = threading.Lock()  # the schematic evaluates on a worker (ADR 0090 package 13)
 
 
 def _read(store, record):
     """A run's mesh and results; a run never changes, so the last few are kept."""
     key = (str(getattr(store, "root", "")), record.run_id)
-    if key not in _READ:
-        if len(_READ) >= 8:
-            _READ.pop(next(iter(_READ)))
-        _READ[key] = (store.read_mesh(record.mesh_id), store.read_results(record.run_id))
-    return _READ[key]
+    with _READ_LOCK:
+        found = _READ.get(key)
+    if found is None:
+        found = (store.read_mesh(record.mesh_id), store.read_results(record.run_id))
+        with _READ_LOCK:
+            while len(_READ) >= 8:
+                _READ.pop(next(iter(_READ)))
+            _READ[key] = found
+    return found
 
 
 # --- evaluation -----------------------------------------------------------------------
@@ -604,6 +610,12 @@ def _input(ctx: Context, op, key: str):
             and ("points" not in spec.types and "table" in spec.types)
         ):
             return got.table()  # points are a table of x, y, z too (ADR 0062 phase 3)
+        if (
+            getattr(got, "type", None) == "series"
+            and spec is not None
+            and ("series" not in spec.types and "table" in spec.types)
+        ):
+            return got.table()  # a curve is a table of x and y too (OP-NEW-3)
         if (
             isinstance(got, ResultValue)
             and spec is not None
@@ -1721,18 +1733,25 @@ def shown(ctx: Context, op) -> tuple[str, str]:
     """What the node shows on the canvas, and its verdict ("pass", "fail" or ""). Errors
     are shown as their message, never raised: the schematic always draws. A value made
     from a run no longer current says so (ADR 0090 decision 4)."""
+    text, verdict, _ok = appearance(ctx, op)
+    return text, verdict
+
+
+def appearance(ctx: Context, op) -> tuple[str, str, bool]:
+    """`shown`, and whether it is a value (False: the text is the error's words), so a
+    node draws an error as one (ADR 0090 package 13)."""
     try:
         text, verdict = _shown(ctx, op)
     except PuzzleError as exc:
-        return bare(op, exc.message), ""
+        return bare(op, exc.message), "", False
     except (KeyboardInterrupt, SystemExit, MemoryError):
         raise
     except Exception as exc:  # noqa: BLE001 - the schematic always draws (OP-5)
-        return bare(op, failure(op, exc).message), ""
+        return bare(op, failure(op, exc).message), "", False
     note = stale_note(ctx, op.id)
     if note and "stale:" not in text:
         text = f"{text} (stale: from the run of {note})"
-    return text, verdict
+    return text, verdict, True
 
 
 def _shown(ctx: Context, op) -> tuple[str, str]:

@@ -145,6 +145,10 @@ class Node:
     # A folded group's nodes (ADR 0071: a cluster's ports are theirs, keyed
     # "<member id>::<port>"), for the view to wire to the member a port belongs to.
     inside: list = field(default_factory=list)
+    # How its value is drawn (ADR 0090 package 13): "" nothing to show, "current",
+    # "stale" (worked out from a run no longer current, or reading what is out of
+    # date: muted, never a verdict's colour), "error", "working" (being worked out).
+    value_state: str = ""
 
     def port(self, key: str) -> Port | None:
         return next((p for p in self.ports if p.key == key), None)
@@ -363,21 +367,28 @@ def build(
     folded: frozenset[str] = frozenset(),
     fields: bool = True,
     store=None,
+    keys: dict | None = None,
+    evaluate: bool = True,
 ) -> Schematic:
     """The schematic of `project`. `runs` are the result store's records, `states` the
     objects' states (`project.status.status`; computed here when not given), `root` the
     project folder (files not found there are marked missing), `folded` the tree groups
     drawn as one node, `fields` whether imported fields are shown (the preference
     `connections.schematic`), and `store` the results store, given when the operators'
-    values are to be shown (ADR 0062)."""
+    values are to be shown (ADR 0062). `keys` are `graph.run_hashes`, when worked out
+    already. With `evaluate` false nothing is worked out: operators' values are left to
+    `values` and `fill` (the GUI does that off its thread, ADR 0090 package 13), each
+    node that would show one marked "working"."""
     from puzzle.adapters import SOLVER_NAMES
     from puzzle.operators import resolved
     from puzzle.project.status import State, run_state, status
 
     runs = list(runs)
     listed = resolved(project)  # sweeps over an operator's list count its values
+    if keys is None and (runs or (evaluate and store is not None) or states is None):
+        keys = run_keys_of(project, root)
     if states is None:
-        states = status(project, runs)
+        states = status(project, runs, keys=keys)
     names = {str(o.id): o.name for o in project.objects.values()}
     out = Schematic()
 
@@ -445,13 +456,15 @@ def build(
             on = [m for sel, m in mats.items() if sel == p.name or sel.startswith(p.name + "/")]
             rows.append(f"{p.name}: {', '.join(dict.fromkeys(on)) or 'no material'}")
         node = add(Node(str(c.id), "component", MODELS, c.name, object=str(c.id),
-                        subtitle=" · ".join(p.name for p in c.parts), rows=rows))  # fmt: skip
+                        subtitle=" · ".join(p.name for p in c.parts), rows=rows,
+                        badge=_joints(c)))  # fmt: skip
         in_features = _feature_nodes(c, node, out, use)  # ADR 0071: loads and supports
         for ref in c.dependencies():
             if ref not in in_features:  # a load's own references go to its node
                 use(str(ref), str(c.id))
         if fields:
             _field_ports(project, c, node, out)
+    _feature_titles(out)
 
     # Studies, and transfers between them.
     for s in project.of_type(Study):
@@ -493,7 +506,7 @@ def build(
         node = Node(f"runs:{s.id}", "runs", RESULTS, label, object=latest.run_id,
                     subtitle=f"{len(mine)} run{'s' if len(mine) != 1 else ''}",
                     badge=_sweep_badge(listed.objects.get(s.id, s)))  # fmt: skip
-        st = run_state(latest, project)
+        st = run_state(latest, project, keys=keys or {})
         node.state, node.reason = st.state, st.reason
         node.ports = [Port("result", "Result", "out", type="result")]
         node.ports += [Port(f, words(f), "out", f) for f in outputs(project, s)]
@@ -518,9 +531,9 @@ def build(
         node.ports += [Port(k, label, "out", type=t,
                             help=f"{label}: gives a {TYPE_WORDS[t].lower()}")
                        for k, label, t in outputs_of(project, p)]  # fmt: skip
-    _operators(project, out, store, states)
-    _optimisations(project, out, store)
-    _mesh_studies(project, out, store)
+    _operators(project, out, states)
+    _optimisations(project, out)
+    _mesh_studies(project, out)
     # Every reference between two nodes is a use wire (ADR 0071 decision 8: each can be
     # drawn and removed), whatever made it.
     # their data wires are these; a component's are drawn with it (its loads' to theirs)
@@ -536,38 +549,57 @@ def build(
 
     wireable = source_kinds()
     for n in out.nodes.values():  # a socket to draw a reference from (ADR 0071 decision 8)
-        if n.kind in wireable and not n.outputs():
+        if n.kind in wireable and not n.outputs() and n.kind != "operator":  # SCH-UX-5
             n.ports.append(Port("use", "Use in…", "out", help="Drag from here onto what uses "
                                 "it (a material onto a component, a coordinate system onto "
                                 "a component's load, a study onto a result tool)"))  # fmt: skip
     for n in out.nodes.values():
         n.used_by = len({w.target for w in out.wires if w.kind == "use" and w.source == n.id})
+    if evaluate:
+        fill(out, values(project, store, keys, root))
+    else:
+        for nid in _shown_by(project, store) & set(out.nodes):
+            out.nodes[nid].value_state = "working"
     _groups(project, out, folded)
     return out
 
 
-def _operators(project: Project, out: Schematic, store, states: dict) -> None:
+def _operators(project: Project, out: Schematic, states: dict) -> None:
     """Operators (ADR 0062) as nodes after what they read, a typed port per input and
-    output, joined by data wires; with a `store`, each shows its value."""
+    output, joined by data wires; their values come from `values`."""
     from puzzle.model.schema import Operator
-    from puzzle.operators import TYPES, doc_text, first_type, is_pre, port_doc
+    from puzzle.operators import (
+        FOLLOWS_INPUTS,
+        TYPE_WORDS,
+        TYPES,
+        doc_text,
+        first_type,
+        is_pre,
+        port_doc,
+    )
 
     ops = project.of_type(Operator)
     pre = {op.id for op in ops if is_pre(project, op)}
+    only_results = _limits(project, ops, pre)
     for op in ops:
         t = TYPES[op.type]
-        column = RESOURCES if op.id in pre else RESULTS  # beside what it feeds (item 8)
-        node = Node(str(op.id), "operator", column, op.name, subtitle=t.label,
+        # Beside what it feeds (item 8): a parameter in Resources; a limit or an allowable
+        # that only checks read, beside them in Results (SCH-UX-4).
+        column = RESOURCES if op.id in pre and op.id not in only_results else RESULTS
+        node = Node(str(op.id), "operator", column, op.name, subtitle=_op_subtitle(op),
                     object=str(op.id), help=doc_text(op.type))  # fmt: skip
         st = states.get(str(op.id))
         if st is not None:
             node.state, node.reason = st.state, st.reason
-        node.ports = [Port(p.key, p.label, "out",
-                           type=first_type(op, project) if i == 0 else p.type,
-                           help=port_doc(p, "out"))
-                      for i, p in enumerate(t.outputs)]  # fmt: skip
+        node.ports = []
+        for i, p in enumerate(t.outputs):
+            given = first_type(op, project) if i == 0 else p.type
+            # SCH-9: where the type follows the inputs, so does the label ("Value", not
+            # "Curve", on a Safety factor of two numbers).
+            label = TYPE_WORDS[given] if i == 0 and op.type in FOLLOWS_INPUTS else p.label
+            node.ports.append(Port(p.key, label, "out", type=given, help=port_doc(p, "out")))
         node.ports += [Port(p.key, p.label, "in", type=p.type, help=port_doc(p, "in"))
-                       for p in t.ports_for(op)]  # fmt: skip
+                       for p in _shown_inputs(op, t)]  # fmt: skip
         out.nodes[node.id] = node
     for op in ops:
         node = out.nodes[str(op.id)]
@@ -587,25 +619,83 @@ def _operators(project: Project, out: Schematic, store, states: dict) -> None:
             out.wires.append(Wire(src.id, node.id, "data", port, key, label, carries,
                                   str(op.id), given or (spec.type if spec else "")))  # fmt: skip
     _model_wires(project, out, pre)
-    if ops:  # pre-solve ones need no results, so they always show their values
-        from puzzle.operators import evaluate as ev
-
-        ctx = ev.Context(project, store)
-        for op in ops:
-            if store is None and op.id not in pre:
-                continue
-            node = out.nodes[str(op.id)]
-            node.value, node.verdict = ev.shown(ctx, op)
-            stale = ev.stale_note(ctx, op.id)
-            if stale and node.state not in ("missing", "failed"):  # ADR 0090 decision 4
-                node.state = "out_of_date"
-                node.reason = f"worked out from the run of {stale}, not current"
-            node.sketch = _sketch(ctx, op)
-            if op.type == "slider":
-                node.slider = _slider_of(ctx, op)
 
 
-def _mesh_studies(project: Project, out: Schematic, store) -> None:
+def _shown_inputs(op, t) -> list:
+    """The inputs a node draws (SCH-UX-5): every required one, every optional one wired
+    or typed, and one empty optional socket more, so a Report shows the items it has
+    and a socket for the next rather than Item A to Item H."""
+    shown, spare = [], False
+    for p in t.ports_for(op):
+        inp = (op.inputs or {}).get(p.key)
+        used = inp is not None and (inp.source is not None or inp.value is not None)
+        if p.required or used:
+            shown.append(p)
+        elif not spare:
+            shown.append(p)
+            spare = True
+    return shown
+
+
+def _limits(project: Project, ops: list, pre: set) -> set:
+    """The before-solving operators only after-solving ones read (a limit, an
+    allowable): read by at least one operator, by no other kind of object, and not by
+    name anywhere in the model (a history argument, a bound value, a sweep, a toggle),
+    nor feeding one that is (SCH-UX-4: they were drawn in Resources, wired across three
+    columns to their checks)."""
+    from puzzle.project.graph import _strings
+
+    named: set[str] = set()
+    for obj in project.objects.values():
+        if obj.kind != "operator":
+            named |= _strings(obj.model_dump(mode="json"), set())
+    readers: dict = {op.id: [] for op in ops}
+    for op in ops:
+        for dep in op.dependencies():
+            if dep in readers:
+                readers[dep].append(op.id)
+    others = {d for o in project.objects.values() if o.kind != "operator"
+              for d in o.dependencies()}  # fmt: skip
+    out = {op.id for op in ops if op.id in pre and readers[op.id] and op.name not in named
+           and op.id not in others}  # fmt: skip
+    changed = True
+    while changed:  # a limit feeding something the model reads is a parameter after all
+        changed = False
+        for oid in list(out):
+            if any(r in pre and r not in out for r in readers[oid]):
+                out.discard(oid)
+                changed = True
+    return out
+
+
+def _op_subtitle(op) -> str:
+    """An operator's type, and for the ones told apart by their settings what those say
+    (OP-NEW-14: eight Result summaries differed only by the names given them):
+    "Result summary · maximum equivalent (von Mises) stress on Bar/Root"."""
+    from puzzle.operators import TYPES
+
+    label = TYPES[op.type].label
+    if op.type == "reduce":
+        from puzzle.operators.evaluate import REDUCTIONS
+        from puzzle.post.quantities import label_of
+
+        wired = (op.inputs or {}).get("result")
+        port = wired.port if wired is not None and wired.source is not None else ""
+        if op.quantity:
+            what = label_of(op.quantity)
+        elif port and port not in ("result", "out"):  # a study's field port: that field
+            what = words(port)
+        else:
+            what = "of its first result"
+        what = what[:1].lower() + what[1:]
+        on = f" on {op.selection}" if op.selection else ""
+        return f"{label} · {REDUCTIONS[op.reduction].lower()} {what}{on}"
+    if op.type == "check":
+        return f"{label} · {'at most' if op.compare == 'at_most' else 'at least'}"
+    return label
+
+
+def _mesh_studies(project: Project, out: Schematic) -> None:
     """Mesh studies (ADR 0066) right of the study they drive, as optimisations are: a
     "drives" mark from the study, the meshes run and the verdict."""
     from puzzle.model.schema import MeshStudy
@@ -618,24 +708,29 @@ def _mesh_studies(project: Project, out: Schematic, store) -> None:
         if str(ms.study) in out.nodes:
             out.wires.append(Wire(str(ms.study), node.id, "drives", label="drives",
                                   object=str(ms.id)))  # fmt: skip
-        study = project.objects.get(ms.study)
-        if store is None or study is None:
-            continue
-        from puzzle import convergence as conv
-
-        try:
-            levels = conv.run(project, study, Path("."), Path("."), store=store,
-                              count=ms.levels, ratio=ms.ratio, outputs=ms.quantities,
-                              read_only=True)  # fmt: skip
-        except Exception:  # noqa: BLE001 - a broken check still draws
-            continue
-        node.badge = f"{sum(1 for lv in levels if lv.run)} of {len(levels)} meshes"
-        vs = conv.verdicts(levels, ms.target)
-        if any(v.state != "too few levels" for v in vs):
-            node.value = "; ".join(v.words for v in vs)
 
 
-def _optimisations(project: Project, out: Schematic, store) -> None:
+def _mesh_study_value(project: Project, ms, store) -> Shown | None:
+    """A mesh study's meshes run and its verdict, from the store."""
+    from puzzle import convergence as conv
+
+    study = project.objects.get(ms.study)
+    if study is None:
+        return None
+    try:
+        levels = conv.run(project, study, Path("."), Path("."), store=store,
+                          count=ms.levels, ratio=ms.ratio, outputs=ms.quantities,
+                          read_only=True)  # fmt: skip
+    except Exception:  # noqa: BLE001 - a broken check still draws
+        return None
+    got = Shown(badge=f"{sum(1 for lv in levels if lv.run)} of {len(levels)} meshes")
+    vs = conv.verdicts(levels, ms.target)
+    if any(v.state != "too few levels" for v in vs):
+        got.value = "; ".join(v.words for v in vs)
+    return got
+
+
+def _optimisations(project: Project, out: Schematic) -> None:
     """Optimisations (ADR 0063 item 9) right of the study they drive: inputs wired from
     the design variables and the objective and constraint outputs, a dashed "drives"
     mark to the study (not a data wire: nothing flows back, so the graph has no
@@ -676,23 +771,172 @@ def _optimisations(project: Project, out: Schematic, store) -> None:
         if str(opt.study) in out.nodes:  # drawn study to optimisation, left to right
             out.wires.append(Wire(str(opt.study), node.id, "drives", label="drives",
                                   object=str(opt.id)))  # fmt: skip
-        if store is not None:
-            from puzzle import optimise
 
-            try:
-                pts = optimise.points(project, store, opt)
-            except Exception:  # noqa: BLE001 - a broken optimisation still draws
-                continue
-            done = sum(p.run for p in pts)
-            node.badge = (f"{done} points" if optimise.adaptive(opt)
-                          else f"{done} of {len(pts)} points")  # fmt: skip
-            top = optimise.best(opt, pts)
-            if top is not None:
-                from puzzle.operators.evaluate import quantity_text
 
-                best = ("best " + quantity_text(top.objective, top.kinds.get("objective"))
-                        if top.objective is not None else "a feasible point")  # fmt: skip
-                node.value = f"{best} at {top.title}"
+def _optimisation_value(project: Project, opt, store) -> Shown | None:
+    """An optimisation's points run and its best so far, from the store."""
+    from puzzle import optimise
+
+    try:
+        pts = optimise.points(project, store, opt)
+    except Exception:  # noqa: BLE001 - a broken optimisation still draws
+        return None
+    done = sum(p.run for p in pts)
+    got = Shown(badge=(f"{done} points" if optimise.adaptive(opt)
+                       else f"{done} of {len(pts)} points"))  # fmt: skip
+    top = optimise.best(opt, pts)
+    if top is not None:
+        from puzzle.operators.evaluate import quantity_text
+
+        best = ("best " + quantity_text(top.objective, top.kinds.get("objective"))
+                if top.objective is not None else "a feasible point")  # fmt: skip
+        got.value = f"{best} at {top.title}"
+    return got
+
+
+@dataclass
+class Shown:
+    """What one node shows that has to be worked out: an operator's value (and verdict,
+    curve, knob), an optimisation's or mesh study's progress. `stale` names the run no
+    longer current it was worked out from; `error` says the value is an error's words."""
+
+    value: str = ""
+    verdict: str = ""
+    sketch: list = field(default_factory=list)
+    slider: tuple[float, float, float] | None = None
+    stale: str = ""
+    error: bool = False
+    badge: str = ""
+
+
+def run_keys_of(project: Project, root=None) -> dict:
+    """`graph.run_hashes`, worked out once a refresh and shared by status, the tree, the
+    schematic and its values (SCH-1: they had been worked out seven times)."""
+    from puzzle.project.graph import run_hashes
+
+    try:
+        return run_hashes(project, root)
+    except ValueError:  # a transfer loop (refused by the model): every run is stale
+        return {}
+
+
+def _shown_by(project: Project, store) -> set[str]:
+    """The nodes whose values `values` works out: every operator that needs no results,
+    and with a store every operator, optimisation and mesh study."""
+    from puzzle.operators import is_pre
+
+    with_store = ("operator", "optimisation", "mesh_study") if store is not None else ()
+    return {str(o.id) for o in project.objects.values() if o.kind in with_store
+            or (o.kind == "operator" and is_pre(project, o))}  # fmt: skip
+
+
+def values(project: Project, store=None, keys: dict | None = None, root=None) -> dict:
+    """Node id -> `Shown`, for every node `_shown_by` names: the half of `build` that
+    evaluates, kept apart so the GUI runs it off its thread (ADR 0090 package 13,
+    SCH-1). Never raises for one operator: its error is its value. `project` is only
+    read, so a session's project (which a change replaces, never edits) is safe to hand
+    a worker."""
+    from puzzle.model.schema import MeshStudy, Operator, Optimisation
+    from puzzle.operators import evaluate as ev
+
+    out: dict[str, Shown] = {}
+    wanted = _shown_by(project, store)
+    ops = [op for op in project.of_type(Operator) if str(op.id) in wanted]
+    if ops:
+        ctx = ev.Context(project, store, root=root)
+        if keys is not None:
+            ctx.shared["keys"] = keys
+        for op in ops:
+            text, verdict, ok = ev.appearance(ctx, op)
+            got = Shown(text, verdict, error=not ok, stale=ev.stale_note(ctx, op.id))
+            got.sketch = _sketch(ctx, op)
+            if op.type == "slider":
+                got.slider = _slider_of(ctx, op)
+            out[str(op.id)] = got
+    for opt in project.of_type(Optimisation):
+        if str(opt.id) in wanted:
+            found = _optimisation_value(project, opt, store)
+            if found is not None:
+                out[str(opt.id)] = found
+    for ms in project.of_type(MeshStudy):
+        if str(ms.id) in wanted:
+            found = _mesh_study_value(project, ms, store)
+            if found is not None:
+                out[str(ms.id)] = found
+    return out
+
+
+# A node in one of these states draws its value as stale: what it reads is not current.
+STALE_STATES = ("out_of_date", "failed", "not_run", "running")
+
+
+def fill(s: Schematic, shown: dict) -> None:
+    """Put worked-out values (`values`) on their nodes, each with how it is drawn: a
+    value from a run no longer current puts its node out of date (ADR 0090 decision 4),
+    and a node out of date draws its value as stale, never as current (SCH-3)."""
+    from puzzle.project.status import worst
+
+    inside = {m.id: m for g in s.nodes.values() if g.kind == "group" for m in g.inside}
+    for nid, got in shown.items():
+        node = s.nodes.get(nid) or inside.get(nid)  # folded: kept for the group's sum
+        if node is None:
+            continue
+        node.value, node.verdict, node.sketch = got.value, got.verdict, got.sketch
+        if node.kind == "operator":
+            node.slider = got.slider
+        if got.badge:
+            node.badge = got.badge
+        if got.stale and node.state not in ("missing", "failed"):
+            node.state = "out_of_date"
+            node.reason = f"worked out from the run of {got.stale}, not current"
+        if not node.value:
+            node.value_state = ""
+        elif got.error:
+            node.value_state = "error"
+        elif got.stale or node.state in STALE_STATES:
+            node.value_state = "stale"
+        else:
+            node.value_state = "current"
+    for g in s.nodes.values():  # a folded group: its worst state, its checks summed
+        if g.kind == "group" and g.inside:
+            g.state = worst(m.state for m in g.inside)
+            _fold_verdicts(g)
+
+
+def _fold_verdicts(group: Node) -> None:
+    """A folded group of checks says how many fail (SCH-UX-10), drawn as stale when any
+    of them is."""
+    checks = [m for m in group.inside if m.verdict in ("pass", "fail")]
+    if not checks:
+        return
+    failing = sum(1 for m in checks if m.verdict == "fail")
+    group.value = (f"{len(checks)} checks: {failing} fail" if failing
+                   else f"{len(checks)} checks: all pass")  # fmt: skip
+    group.verdict = "fail" if failing else "pass"
+    group.value_state = ("current" if all(m.value_state == "current" for m in checks)
+                         else "stale")  # fmt: skip
+
+
+def value_look(node: Node) -> tuple[str, str]:
+    """(how a node's value is coloured, the text drawn): "pass" or "fail", the verdict's
+    colour, only for a current value; else "stale" (muted, said to be out of date),
+    "not_run" (waiting for a study's run), "error", "working" or "text". The GUI and
+    the SVG draw by this, so no out-of-date verdict is drawn as current (ADR 0090
+    package 13)."""
+    text = node.value
+    if node.value_state == "working":
+        return "working", text or "working…"
+    if node.value_state == "error" and node.state == "not_run":
+        return "not_run", text  # waiting for a run, not wrong: muted, as the tree says
+    if node.value_state == "error":
+        return "error", text
+    if node.value_state == "stale" or (node.value and node.state in STALE_STATES):
+        if "stale" not in text and "out of date" not in text:
+            text = f"{text} (out of date)"
+        return "stale", text
+    if node.verdict in ("pass", "fail"):
+        return node.verdict, text
+    return "text", text
 
 
 def _sketch(ctx, op) -> list:
@@ -881,6 +1125,29 @@ def _folded_ports(inside, wires, held: set) -> list:
     return ports
 
 
+def _joints(comp: Component) -> str:
+    """What joins a component's parts, counted (SCH-10: contacts and bolts were on no
+    node): "3 contacts · 2 bolts · 1 weld"."""
+    counts = [(len(comp.contacts), "contact"), (len(comp.connectors), "bolt"),
+              (len(comp.welds), "weld")]  # fmt: skip
+    return " · ".join(f"{n} {word}{'s' if n != 1 else ''}" for n, word in counts if n)
+
+
+def _feature_titles(out: Schematic) -> None:
+    """Loads on two components with one title ("Fixed on Base/Bottom" twice) say which
+    component each is on (SCH-10)."""
+    by_title: dict[str, list[Node]] = {}
+    for n in out.nodes.values():
+        if n.kind == "feature":
+            by_title.setdefault(n.label, []).append(n)
+    for nodes in by_title.values():
+        if len({n.object for n in nodes}) > 1:
+            for n in nodes:
+                comp = out.nodes.get(n.object)
+                if comp is not None:
+                    n.subtitle = f"{n.subtitle} · {comp.label}" if n.subtitle else comp.label
+
+
 def _feature_id(comp: Component, path: str) -> str:
     return f"feature:{comp.id}:{path}"
 
@@ -1029,6 +1296,7 @@ def _groups(project: Project, out: Schematic, folded: frozenset[str]) -> None:
                     state=worst(n.state for n in inside))  # fmt: skip
         node.ports = _folded_ports(inside, out.wires, set(held))
         node.inside = inside
+        _fold_verdicts(node)  # SCH-UX-10: a folded group of checks says how many fail
         for w in out.wires:
             if w.source in held and w.target in held:
                 continue  # inside the fold: dropped below
