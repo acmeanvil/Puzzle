@@ -37,3 +37,11 @@ Not supported for now: MYSTRAN, FreeFEM, GetDP and Palace. OpenFOAM was on this 
 - FreeFEM for custom PDEs: overlaps with FEniCSx, which also serves electromagnetics.
 - GetDP or Palace as the second EM solver: FEniCSx fills that role and is already in the line-up for custom PDEs.
 - OpenFOAM for CFD: larger community, but Code_Saturne fits the MED-based toolchain and pairs naturally with Code_Aster.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Overtaken (ADR-34): the line-up is eight adapters, not five. OpenFOAM joined
+by ADR 0016 (paired with Code_Saturne in shoot-outs), PyNite by ADR 0079 (frames) and
+OpenCourant by ADR 0085 (explicit dynamics, a separate AGPL program). The plug-in entry
+point (`puzzle.adapters`) holds all eight. CLAUDE.md's adapter table is the current list
+with what each is verified by.

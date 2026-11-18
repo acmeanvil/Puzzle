@@ -632,8 +632,150 @@ class ResultsTab(QWidget):
             self.window._select_run(run_id, f"{field}:value")
 
 
+THREADS = ["Contact", "Axial load", "Engaged threads", "First thread's share",
+           "Each thread's share", "Wedge (radial)", "Largest flank pressure"]  # fmt: skip
+THREAD_FIELDS = [("Flank pressure", "thread_pressure"), ("Thread force", "thread_force")]
+
+
+class ThreadsTab(QWidget):
+    """For a run and step: each threaded contact's axial load, how it shares out over
+    the engaged threads (the first, at the mouth, first), the wedge and the largest flank
+    pressure (ADR 0076 decision 5; ADR 0090 package 16, ADR-16), as MCP
+    `thread_results` gives them (`thread_setup.results`); the nodal fields in the view
+    by a button each."""
+
+    def __init__(self, window) -> None:
+        super().__init__()
+        self.window = window
+        self.rows: list[dict] = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        bar = QHBoxLayout()
+        self.run = QComboBox()
+        self.run.currentIndexChanged.connect(lambda _i: self._steps())
+        self.step = QComboBox()
+        self.step.currentIndexChanged.connect(lambda _i: self.show_results())
+        bar.addWidget(QLabel("Run"))
+        bar.addWidget(self.run, 1)
+        bar.addWidget(QLabel("Step"))
+        bar.addWidget(self.step)
+        layout.addLayout(bar)
+        shown = QHBoxLayout()
+        shown.addWidget(QLabel("Show"))
+        self.buttons = {}
+        for text, field in THREAD_FIELDS:
+            button = QPushButton(text)
+            button.clicked.connect(lambda _c=False, f=field: self.show_field(f))
+            shown.addWidget(button)
+            self.buttons[field] = button
+        shown.addStretch(1)
+        layout.addLayout(shown)
+        self.note = role(QLabel(""), "muted")
+        self.note.setWordWrap(True)
+        layout.addWidget(self.note)
+        self.table = QTableWidget(0, len(THREADS))
+        self.table.setHorizontalHeaderLabels(THREADS)
+        self.table.verticalHeader().hide()
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        layout.addWidget(self.table, 1)
+
+    def refresh(self) -> None:
+        """The runs that have thread results, newest first, keeping the one chosen."""
+        if self.window.session is None:
+            return
+        from puzzle.labels import run_label
+
+        chosen = self.run.currentData()
+        self.run.blockSignals(True)
+        self.run.clear()
+        try:
+            store = self.window._store()
+            runs = [r for r in store.runs() if r.status == "completed"]
+        except Exception:  # noqa: BLE001 - no results yet
+            runs, store = [], None
+        for r in sorted(runs, key=lambda r: r.recorded_at, reverse=True):
+            try:
+                names = {f for f, _loc, _c in store.field_catalog(r.run_id)}
+            except Exception:  # noqa: BLE001 - an unreadable run: not listed
+                continue
+            if "thread_load" in names:
+                self.run.addItem(run_label(r), r.run_id)
+        found = self.run.findData(chosen)
+        self.run.setCurrentIndex(found if found >= 0 else 0)
+        self.run.blockSignals(False)
+        self._steps()
+
+    def _steps(self) -> None:
+        run_id = self.run.currentData()
+        self.step.blockSignals(True)
+        self.step.clear()
+        if run_id is not None:
+            results = self.window._store().read_results(run_id)
+            steps = [s for s in results.steps if "thread_load" in s.fields]
+            for i, s in enumerate(steps, start=1):
+                self.step.addItem(f"Step {i}: {s.label()}", i)
+            self.step.setCurrentIndex(len(steps) - 1)
+        self.step.blockSignals(False)
+        self.show_results()
+
+    def show_results(self) -> None:
+        from puzzle import thread_setup as ts
+        from puzzle.model.units import convert, pretty
+        from puzzle.settings import current
+
+        run_id = self.run.currentData()
+        self.rows = []
+        for button in self.buttons.values():
+            button.setEnabled(run_id is not None)
+        if run_id is None:
+            self.note.setText("Make a contact a thread (Model → Contacts → Thread on a "
+                              "contact…) and run its study on CalculiX, Code_Aster or "
+                              "FEniCSx to see how the load shares out over the "
+                              "threads.")  # fmt: skip
+        else:
+            try:
+                store = self.window._store()
+                record = store.get_run(run_id)
+                found = ts.results(self.window.session.project, store.read_mesh(record.mesh_id),
+                                   store.read_results(run_id), None,
+                                   self.step.currentData())  # fmt: skip
+                self.rows = found["threads"]
+                self.note.setText("Each engaged thread's share of the axial load, the first "
+                                  "(at the mouth) first. The wedge is the total radial force "
+                                  "that opens the nut. Rigid threads carry no spring force "
+                                  "and have no rows.")  # fmt: skip
+            except Exception as exc:  # noqa: BLE001 - the model changed since the run
+                self.note.setText(f"These results can't be read for this model: {exc}")
+        units = current().display_units()
+
+        def q(value, si, kind):
+            if value is None:
+                return "—"
+            unit = units[kind]
+            return f"{convert(value, si, unit):.4g} {pretty(unit)}"
+
+        self.table.setRowCount(len(self.rows))
+        for r, row in enumerate(self.rows):
+            share = row["first_thread_share"]
+            each = ", ".join(f"{t['share']:.0%}" for t in row["threads"])
+            cells = [row["contact"], q(row["axial_N"], "N", "force"), str(len(row["threads"])),
+                     "—" if share is None else f"{share:.0%}", each,
+                     q(row["wedge_N"], "N", "force"),
+                     q(row.get("peak_pressure_Pa"), "Pa", "pressure")]  # fmt: skip
+            for k, text in enumerate(cells):
+                self.table.setItem(r, k, QTableWidgetItem(text))
+        self.table.resizeColumnsToContents()
+
+    def show_field(self, field: str) -> None:
+        """The run's thread field in the view."""
+        run_id = self.run.currentData()
+        if run_id is not None:
+            self.window._select_run(run_id, f"{field}:value")
+
+
 class ContactPanel(QWidget):
-    """Window → Contacts: the Setup, Initial state and Results tabs."""
+    """Window → Contacts: the Setup, Initial state, Results and Threads tabs."""
 
     def __init__(self, window) -> None:
         super().__init__()
@@ -649,6 +791,8 @@ class ContactPanel(QWidget):
         self.tabs.addTab(self.initial, "Initial state")
         self.results = ResultsTab(window)
         self.tabs.addTab(self.results, "Results")
+        self.threads = ThreadsTab(window)
+        self.tabs.addTab(self.threads, "Threads")
         self.tabs.currentChanged.connect(lambda _i: self.refresh())
         layout.addWidget(self.tabs)
 
@@ -659,6 +803,13 @@ class ContactPanel(QWidget):
         self.setup.refresh()
         self.initial.refresh()
         self.results.refresh()
+        self.threads.refresh()
+
+    def show_threads(self) -> None:
+        """Results → Result tools → Thread results: the Threads tab, shown."""
+        self.window.docks.show("contacts")
+        self.tabs.setCurrentWidget(self.threads)
+        self.threads.refresh()
 
     def warnings(self) -> list:
         """The last check's warnings, for the Problems list."""

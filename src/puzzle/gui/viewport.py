@@ -175,32 +175,10 @@ def _on_copies(state: dict, point) -> dict:
                                                            strict=True))}  # fmt: skip
 
 
-def _display(values, kind: str | None):
-    """SI values in the display unit of their kind (ADR 0024), and that unit's name."""
-    from puzzle.model.units import DIMENSIONS, pretty, registry
-    from puzzle.settings import current
-
-    if kind is None:
-        return values, None
-    si, target = DIMENSIONS[kind][1], current().display_units()[kind]
-    if target == si:
-        return values, pretty(si)
-    converted = registry().Quantity(np.asarray(values, float), si).to(target).magnitude
-    return np.asarray(converted), pretty(target)
-
-
-def from_display(values, kind: str | None) -> np.ndarray:
-    """Values typed in the display unit of their kind, in SI: `_display` the other way."""
-    from puzzle.model.units import DIMENSIONS, registry
-    from puzzle.settings import current
-
-    values = np.asarray(values, float)
-    if kind is None:
-        return values
-    si, shown = DIMENSIONS[kind][1], current().display_units()[kind]
-    if shown == si:
-        return values
-    return np.asarray(registry().Quantity(values, shown).to(si).magnitude)
+# SI values in the display unit of their kind (ADR 0024), and back: the core's (the
+# exports read them too, and the core never imports the GUI).
+from puzzle.model.units import from_display  # noqa: E402, F401
+from puzzle.model.units import to_display as _display  # noqa: E402
 
 
 def _short_unit(unit: str) -> str:

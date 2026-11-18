@@ -42,6 +42,7 @@ from puzzle.commands.model import (
     RunConvergence,
     RunMeshShootout,
     RunOptimisation,
+    RunShootout,
     RunStudy,
     SetAutonomy,
     _Command,
@@ -63,7 +64,7 @@ from puzzle.project.store import load_project, save_project
 
 KINDS: dict[str, type[ProjectObject]] = {cls.kind: cls for cls in OBJECT_TYPES}
 RUNS = frozenset(c.model_fields["command"].default for c in (
-    RunStudy, RunOptimisation, RunConvergence, RunAdapt, RunMeshShootout))  # fmt: skip
+    RunStudy, RunOptimisation, RunConvergence, RunAdapt, RunMeshShootout, RunShootout))  # fmt: skip
 CONFIRM_WITHIN = timedelta(minutes=15)
 LEVELS = ("advise", "propose", "act_in_budget", "act")  # each may do what those before may
 
@@ -1222,6 +1223,16 @@ class Session:
                                            cmd.quantities, cmd.tolerance,
                                            on_output=on_output)  # fmt: skip
             return out, {"study": st.name, "passed": out["passed"]}
+        if isinstance(cmd, RunShootout):
+            from puzzle.shootout import shootout_report
+
+            st = resolve(project, cmd.study, Study)
+            stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            folder = fresh_folder(work / f"{slug(st.name)}-shootout-{stamp}")
+            out = shootout_report(project, st.id, self.root, folder, cmd.solvers, store=store,
+                                  on_output=on_output)  # fmt: skip
+            return out, {"study": st.name, "passed": out["passed"],
+                         "solvers": list(out["runs"])}  # fmt: skip
         raise PuzzleError(f"{cmd.command} is not a run", code="unsupported")
 
     def _run(

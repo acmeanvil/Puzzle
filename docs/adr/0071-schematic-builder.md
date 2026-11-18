@@ -332,3 +332,14 @@ names, units and no raw data on view.
 ## Amended (2026-11-18, ADR 0090 package 13)
 
 An output whose type follows its inputs is labelled by that type (a Safety factor of two numbers gives "Number"). Loads of one title on two components name their component. A folded group of checks says how many fail.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Decision 8's parity test sees references held by id only (ADR-59):
+references by name (a selection on a feature, contact, weld or section,
+`Quantity.parameter`) are outside it, and of its twenty exemptions eight are set in
+forms. Read decision 8 as "every reference is wired, or set in the form named in
+`WIRED_ELSEWHERE`"; extending the test to name-typed references is on ADR 0072's list.
+Decision 6's MCP duty now has round-trips for step 5's kinds: a field operator, a
+ParaView filter, a Report written by `operator_export` and a recipe put in by
+`recipe_insert` (`tests/test_operators_over_mcp.py`, ADR-60).

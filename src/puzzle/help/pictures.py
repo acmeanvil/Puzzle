@@ -101,9 +101,16 @@ def unknown_menus(text: str, paths) -> list[str]:
     return bad
 
 
-def with_pictures(text: str) -> str:
+def link(menu_path: str) -> str:
+    """The `puzzle:` link that opens a menu item from the Help window (ADR-E-1)."""
+    return "puzzle:" + menu_file(menu_path)[: -len(".png")]
+
+
+def with_pictures(text: str, links: bool = False) -> str:
     """The page's Markdown with a picture after the block that first names each menu
-    location (a paragraph, a list, a table), never inside fenced code."""
+    location (a paragraph, a list, a table), never inside fenced code; with `links` (the
+    Help window, ADR 0083 decision 2) a link under it that opens the item. The site and
+    the PDF have no tools to open, so they leave the links out."""
     menus = index()["menus"]
     after: dict[int, list[str]] = {}
     seen: set[str] = set()
@@ -119,6 +126,8 @@ def with_pictures(text: str) -> str:
         out.append(line)
         for menu in after.get(i, []):
             out += ["", f"![{menu}](image:{menus[menu]})", ""]
+            if links:
+                out += [f"[Open {menu}]({link(menu)})", ""]
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 

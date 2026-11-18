@@ -207,7 +207,7 @@ def advise(
         add("physics", "needed", f"{component.name} solves nothing yet.", "add_physics",
             "Add physics…")  # fmt: skip
     else:
-        from puzzle.gui.choices import label
+        from puzzle.labels import label
 
         add("physics", "done", ", ".join(label(p.type) for p in component.physics) + ".")
 
@@ -250,7 +250,7 @@ def advise(
         add("study", "needed", f"{study.name}: {trouble[0]}", "solver_settings" if
             "setting" in trouble[0] else "show_problems", "Show the problems")  # fmt: skip
     else:
-        from puzzle.gui.choices import solver_label
+        from puzzle.labels import solver_label
 
         add("study", "done", f"{study.name} on {solver_label(study.solver)}.")
 

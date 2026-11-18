@@ -110,6 +110,47 @@ def paths(window) -> dict[str, list]:
     return out
 
 
+def slug(menu_path: str) -> str:
+    """A menu path as a link names it (`puzzle:menu/model-studies-new-analysis`, ADR 0083
+    decision 2): the words of its picture's name (`pictures.menu_file`)."""
+    from puzzle.help import pictures
+
+    return pictures.menu_file(menu_path)[len("menu/") : -len(".png")]
+
+
+def action_for(window, target: str):
+    """The menu bar's action a `puzzle:` link names, or None: a menu path's slug
+    (`menu/<slug>`), the menu path itself, or a toolbar action's name."""
+    named = getattr(window, "actions_by_name", {}).get(target)
+    if named is not None:
+        return named
+    wanted = target[len("menu/") :] if target.startswith("menu/") else target
+    for path, chain in paths(window).items():
+        if wanted in (path, slug(path)):
+            return chain[-1][1]
+    return None
+
+
+def path_of(window, action, menu: QMenu | None = None) -> str | None:
+    """The menu path of an action on the menu bar (F1 on an open menu, ADR-E-2): from
+    the open menu up through its parents, so a dynamic menu isn't refilled under it."""
+    if menu is not None:
+        words, at = [action.text().replace("&", "")], menu
+        while isinstance(at, QMenu):
+            words.insert(0, at.title().replace("&", ""))
+            at = at.parentWidget()
+        if words[0] in TOP_TITLES:
+            return " → ".join(words)
+    for path, chain in paths(window).items():
+        if chain[-1][1] is action:
+            return path
+    return None
+
+
+TOP_TITLES = ("Project", "Edit", "Geometry", "Materials", "Mesh", "Model", "Results",
+              "Window", "Help")  # fmt: skip
+
+
 def _choose(window, title: str, objects: list, what: str):
     """The one object of a kind, or the user's choice in one form."""
     if not objects:
@@ -623,6 +664,10 @@ def _model(window, menu: QMenu) -> None:
          "A light weld along picked edges or an edge selection (ADR 0078)")  # fmt: skip
     _add(bolts, "Weld fatigue…", lambda: weld_fatigue(window),
          "A weld's fatigue on a run: AISC 360 Appendix 3 or ASME VIII-2 5.5.5")  # fmt: skip
+    from puzzle.gui.weld_forms import weld_bead
+
+    _add(bolts, "Weld bead…", _with_component(window, lambda c: weld_bead(window, c)),
+         "Draw a light weld as a modelled bead, or a bead back to a light weld")  # fmt: skip
     bolts.addSeparator()
     from puzzle.gui import visibility as vis
 
@@ -695,6 +740,8 @@ def _model(window, menu: QMenu) -> None:
     _add(runs, "Stop all", window.stop_all, "Stop the running study and the ones waiting")
     _add(runs, "Run on…", lambda: _run_on(window),
          "Here, or a remote host reached by SSH (ADR 0021)")  # fmt: skip
+    _add(runs, "Run shoot-out…", lambda: _solver_shootout(window),
+         "The study solved by its own solver and others on one mesh, compared")  # fmt: skip
 
 
 def _export_archive(window) -> None:
@@ -837,6 +884,8 @@ def _results(window, menu: QMenu) -> None:
          "A frame's members checked by their code: the governing ratio per member")  # fmt: skip
     _add(probes, "Weld results", lambda: window.docks.show("welds"),
          "Light welds' line forces, AISC 360 J2 and the instantaneous centre")  # fmt: skip
+    _add(probes, "Thread results", lambda: window.contacts.show_threads(),
+         "Threaded contacts: each thread's share of the load, the wedge")  # fmt: skip
     view = _sub(menu, "View")
     _add(view, "Section cut", ribbon.cut, "Cut the model by a plane to see inside")
     _add(view, "Animate", ribbon.animate, "Play the deformation, or the steps")
@@ -889,6 +938,12 @@ def _mesh_study(window) -> None:
     study = current_study(window, "New mesh study")
     if study is not None:
         convergence_panel.new_mesh_study(window, str(study.id))
+
+
+def _solver_shootout(window) -> None:
+    from puzzle.gui.solver_shootout import solver_shootout
+
+    solver_shootout(window)
 
 
 def _mesh_shootout(window) -> None:
@@ -1128,9 +1183,17 @@ def _help(window, menu: QMenu) -> None:
          tip="What Puzzle itself did: slow steps, errors, for a bug report")  # fmt: skip
     _add(menu, "Design decisions (ADRs)", lambda: _open_docs(window), free=True,
          tip="Why Puzzle works as it does: its design records, for developers")  # fmt: skip
+    _add(menu, "Licences", lambda: _licences(window), free=True,
+         tip="Every package Puzzle carries and its licence; where the source is")  # fmt: skip
     menu.addSeparator()
     about = _add(menu, "About Puzzle", lambda: _about(window), free=True)
     about.setMenuRole(QAction.MenuRole.AboutRole)  # macOS: the application menu
+
+
+def _licences(window) -> None:
+    from puzzle.gui.licences_dialog import show_licences
+
+    show_licences(window)
 
 
 def _element_library(window) -> None:

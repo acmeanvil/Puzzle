@@ -4,7 +4,7 @@ section: guide
 order: 20
 keys: panel:geometry, kind:geometry, section:geometry, tree:selection, kind:construction, section:construction geometry
 summary: Import CAD or build a part from steps, name the faces you will load as selections, measure it exactly, and place paths and planes for results.
-adrs: 0014, 0017, 0042, 0046
+adrs: 0014, 0017, 0042, 0046, 0065
 ---
 
 A geometry is a part's shape: an imported CAD file, or a history of steps you can edit
@@ -55,6 +55,39 @@ Those names follow later edits, so selections built on them survive.
 
 The geometry's History folder in the tree lists its steps. Right-click a step: Edit…,
 Insert step after, Turn off (suppress), Move up, Move down or Delete step.
+
+### Curves, sweeps, surfaces and shape changes
+
+The Sweep group and the rest of Modify make shapes from curves and change shapes
+whole. Each is a history step like the others, previewed as you set it.
+
+- **Spline** (Geometry → Sweep → Spline): a smooth curve through points, as a path for
+  a sweep or pipe, or as a curved beam.
+- **Sweep along a path** and **Pipe along a path**: a profile carried along a path; a
+  pipe is a round or tube section given by its radii.
+- **Loft through profiles**: a body through two or more profiles in turn.
+- **Patch**: a surface filling a boundary of edges (or of points). **Thicken**: a
+  surface made a solid of a thickness, to one side, or half to each.
+- **SubD from a cage** (Geometry → Sweep → SubD from a cage): a smooth body from a
+  coarse cage of quadrilaterals (an OBJ file), by Catmull–Clark subdivision, made into
+  exact B-spline faces.
+- **Mirror** (Geometry → Modify → Mirror): a copy across a plane square to x, y or z.
+  With Keep the original on, the copy is fused onto it: a whole part from its half. The
+  copy's faces are named `<face>~m`.
+- **Scale**: larger or smaller by one factor, about a point.
+- **Deform** (Geometry → Modify → Deform): twist, taper, bend or a box's corners moved,
+  for shapes no sketch gives.
+- **Split face by sketch**: a sketch projected onto faces splits them; the regions
+  inside are named `<step>/region`, for a load on part of a face.
+
+A faceted part (STL, OBJ, 3MF) can be united with, cut by or intersected with another
+faceted part: right-click the geometry, Combine with another faceted part…. The result
+is a new faceted geometry.
+
+For shape optimisation, a study's mesh can be morphed instead of the geometry (the
+study's Morph, in its Properties): handles moved by a distance or a parameter, fixed
+selections held, the rest following smoothly, and a morph that would turn an element
+inside out refused. An optimisation can then drive the handles' parameter.
 
 ## How to draw a sketch
 

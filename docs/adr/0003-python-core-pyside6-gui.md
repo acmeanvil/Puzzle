@@ -29,3 +29,18 @@ Most libraries Puzzle needs have first-class Python bindings: OCP and build123d 
 - C++ with Qt: fastest, but slower to build and fewer contributors.
 - Electron or a web UI first: easier to distribute, but CAD-grade picking and large meshes are harder in the browser.
 - Rust GUI toolkits: no mature equivalent of Qt plus VTK.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+"GUI code stays separate from the core ... never the reverse" did not hold:
+fourteen imports of `puzzle.gui` from the core (ADR-E-16). Each shared piece moved to
+the core: the colour tokens to `puzzle.look`, names for keys to `puzzle.labels`, the
+display-unit conversion to `puzzle.model.units.to_display`/`from_display`, the
+Properties descriptions to `puzzle.model.descriptions`, the Markdown and TeX splitting
+to `puzzle.markup`; `gui.theme`, `gui.choices`, `gui.viewport`, `gui.form` and
+`gui.agent_view` import them from there. Three entry points into Qt remain, each a
+lazy import refused in words without PySide6: `puzzle gui`, `puzzle progress --plot`
+(it draws the Solution panel) and the PDF manual (Qt prints it).
+`tests/test_core_without_gui.py` refuses any other and imports every core module with
+PySide6 blocked. The First implementation's "Not there yet" list (box selection, the
+schematic, sweeps, shoot-out reports) is built: ADRs 0034, 0058, 0018 and 0011 (ADR-E-17).

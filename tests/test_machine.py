@@ -88,3 +88,20 @@ def test_a_staged_solve_runs_on_the_machines_own_disk(tmp_path, monkeypatch):
     assert (
         plain.wrap(["x"], tmp_path)[plain.wrap(["x"], tmp_path).index("--cd") + 1] == "/mnt/c/run"
     )
+
+
+def test_a_failed_copy_back_fails_the_run(tmp_path, monkeypatch):
+    """ADR-56: a staged case that didn't all come home was only said; a run would read
+    what came back as its results. Now the copy-back's failure is the run's."""
+    from puzzle.errors import PuzzleError
+
+    monkeypatch.setattr(machine, "wsl", lambda: "wsl.exe")
+    monkeypatch.setattr(machine, "linux_path", lambda p: "/mnt/c/run")
+    monkeypatch.setattr(machine, "_run", lambda argv, timeout=600: type(
+        "Done", (), {"returncode": 1, "stderr": b"cp: No space left on device"})())  # fmt: skip
+    rt = machine.WslRuntime("elmer", "puzzle-elmer", stage=True)
+    said = []
+    with pytest.raises(PuzzleError) as err:
+        rt.finish(tmp_path, said.append)
+    assert err.value.code == "transfer_failed" and "No space left" in str(err.value)
+    assert said and rt.staged(tmp_path) in str(err.value)

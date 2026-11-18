@@ -52,3 +52,10 @@ Every typed quantity is read by `units.parse_quantity`: a bare number is in the 
 ## Amended (2026-11-18, ADR 0090 package 11)
 
 Display units default to the engineering system (mm, MPa, °C) instead of SI (the maintainer, 2026-11-17; ADR 0090 UX-11). A user who had chosen a system keeps it; stored values and what solvers get are unchanged. The Settings dialog names the group of panel preferences "Agent panel", apart from the Agent page of models and keys, and shows no ADR numbers.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+The Built section is stale (ADR-E-8): the meshing and solver preferences are
+in use (Mesh preview, Netgen optimiser, element types, solvers' level), results draw in
+the display units, the dialog is Project → Settings…, and the groups are eleven
+(Interface, 3D mouse, Results, Versions, Connections and Schematic added).

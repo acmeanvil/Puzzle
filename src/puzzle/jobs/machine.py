@@ -270,8 +270,14 @@ class WslRuntime(Runtime):
             return
         there, here = self.staged(workdir), linux_path(workdir)
         done = self._shell(f"cp -a '{there}/.' '{here}/' && rm -rf '{there}'")
-        if done.returncode != 0 and say:
-            say(f"Couldn't fetch every file back from {self.distro}: {_text(done.stderr)}")
+        if done.returncode != 0:  # ADR-56: a run whose files didn't all come back failed
+            said = f"couldn't fetch every file back from {self.distro}: {_text(done.stderr)}"
+            if say:
+                say(said)
+            from puzzle.errors import PuzzleError
+
+            raise PuzzleError(f"{said}; the case is kept there at {there}",
+                              code="transfer_failed")  # fmt: skip
 
     def describe(self) -> str:
         return f"wsl:{self.distro}"

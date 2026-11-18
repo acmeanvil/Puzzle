@@ -58,3 +58,12 @@ Elmer's mortar projectors also tie heat transfer and magnetodynamics across nonc
 - Code_Aster first: most capable for nonlinear structural work, but hardest to install, and it isn't an electromagnetics solver.
 - One solver only: would not test the solver-neutral claim.
 - CalculiX only for structures, Elmer only for electromagnetics: splits physics by solver and prevents comparing them on shared problems.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Overtaken in part (ADR-34, ADR-E-22). The MVP pair is long past: eight
+adapters now (ADR 0012's amendment lists them). The table's "bonded, nonconformal:
+Mortar BC with `Contact Type = tie`: Supported" row is wrong: Elmer's adapter claims
+conformal bonding only and refuses a nonconformal bond (ADR 0072 keeps the mortar tie as
+open work). Elmer's static currents, waves, circuits and its experimental contact
+types are still planned (ADR 0072 section 3).

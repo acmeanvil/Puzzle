@@ -350,3 +350,16 @@ group does not.
 - **Axisymmetric-only:** the 2D path is the gate, but tapped holes in assemblies are 3D.
 - **Bond plus a computed share** (Yamamoto applied after the solve): cheap, but no wedge
   and no effect on the model's stiffness or the boss's stresses.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Not built, and the index row no longer claims it (ADR-14, ADR-15, ADR-16):
+lead torque (no torque output; friction on threads is refused everywhere); step 2's
+gates on the shank stress (1 %), the boss's hoop stress (10 %) and VDI 2230's thread
+compliance (10 %), and step 3's friction torque, are not asserted by the benchmark; the
+`thread_axis` and `thread_mesh` problems are not raised. These go on ADR 0072's list.
+Decision 5's GUI is built: the Contact tool's Threads tab (Window → Contacts, or Results
+→ Result tools → Thread results) shows each threaded contact's axial load, each engaged
+thread's share, the wedge and the largest flank pressure, from `thread_setup.results`
+as MCP `thread_results` gives them; the bolt table's First thread column stays for beam
+bolts. Test: `tests/test_reach_forms.py`.

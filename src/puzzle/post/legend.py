@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from puzzle.gui.theme import OUTSIDE_COLOURS
+from puzzle.look import OUTSIDE_COLOURS
 
 COLORMAPS = [
     ("Rainbow, blue to red (turbo)", "turbo"),

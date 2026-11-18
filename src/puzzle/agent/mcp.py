@@ -981,6 +981,22 @@ def build_server(root: Path, client: str = "mcp-client", *, outside: bool = True
         return out.run if out.status == "applied" else out.to_dict()
 
     @tool(
+        description="A solver shoot-out (ADR 0011): the study solved by its own solver and "
+        "by `solvers` (others, by key: calculix, code_aster, elmer, fenicsx, code_saturne, "
+        "openfoam; default the study's shootout.solvers) on one mesh, compared by the "
+        "study's shoot-out metrics, else each physics' first result node by node "
+        "(relative L2 within 1 %; eigenfrequencies for modal and buckling steps). Returns "
+        "each comparison's value, tolerance and pass, each solver's run id, the settings "
+        "each solver was given beyond its defaults, and a Markdown table; the report is "
+        "kept with the results. A run: the autonomy level decides (a proposal at "
+        "propose) and every fresh solve counts against the budget."
+    )
+    @guarded
+    def solver_shootout(study: str, solvers: list[str] | None = None) -> dict[str, Any]:
+        out = run({"command": "run_shootout", "study": study, "solvers": solvers})
+        return out.run if out.status == "applied" else out.to_dict()
+
+    @tool(
         description='Solve a sketch (an extrude or revolve profile {"sketch": {...}}; '
         "format in puzzle.geometry.sketch) with the project's parameters: whether it solves, "
         "the degrees of freedom left, the conflicting constraints (1-based) and the solved "

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from html import escape
 
-from puzzle.gui.theme import LIGHT
+from puzzle.look import LIGHT
 from puzzle.operators import TYPE_COLOURS
 from puzzle.project.status import WORDS
 from puzzle.schematic import (
@@ -21,7 +21,7 @@ from puzzle.schematic.layout import TITLE, Layout, rows
 
 MARGIN = 30.0
 HEAD = 28.0  # the column headings' band
-# The theme's light tokens (ADR 0045; theme.py imports no Qt).
+# The theme's light tokens (ADR 0045; `puzzle.look`, no Qt).
 TEXT, MUTED, BORDER, FILL = LIGHT.text, LIGHT.muted, LIGHT.border, LIGHT.sunken
 HEADER, USE = LIGHT.schematic_header, LIGHT.schematic_use
 

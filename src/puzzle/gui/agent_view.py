@@ -13,9 +13,6 @@ engine.
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass
-
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QFont, QImage, QTextDocument
 from PySide6.QtWidgets import (
@@ -34,30 +31,7 @@ from PySide6.QtWidgets import (
 
 from puzzle.gui.theme import current as tokens
 from puzzle.gui.theme import role
-
-FENCE = re.compile(r"^```([\w+.-]*)[^\n]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
-DISPLAY_TEX = re.compile(r"\$\$(.+?)\$\$", re.DOTALL)
-INLINE_TEX = re.compile(r"(?<![\\$\w])\$(?!\s)([^$\n]+?)(?<!\s)\$(?![\w$])")
-
-
-@dataclass
-class Segment:
-    kind: str  # "text" or "code"
-    text: str
-    language: str = ""
-
-
-def segments(markdown: str) -> list[Segment]:
-    """A reply cut into its prose and its fenced code blocks, in order."""
-    out, at = [], 0
-    for m in FENCE.finditer(markdown):
-        if markdown[at : m.start()].strip():
-            out.append(Segment("text", markdown[at : m.start()]))
-        out.append(Segment("code", m.group(2).rstrip("\n"), m.group(1)))
-        at = m.end()
-    if markdown[at:].strip():
-        out.append(Segment("text", markdown[at:]))
-    return out
+from puzzle.markup import DISPLAY_TEX, FENCE, INLINE_TEX, Segment, segments  # noqa: E402, F401
 
 
 def tex_image(tex: str, colour: str, display: bool = False) -> QImage | None:

@@ -411,6 +411,19 @@ class SolverAdapter(ABC):
             if (w.formulation == "line" and w.formulation not in caps.welds)
             or component.dimension != "3d"
         ]
+        parts = {p.name for p in component.parts}
+        problems += [  # ADR-20: "modelled" set by hand with no bead drawn is no weld at all
+            f"weld '{w.name}' is modelled but has no bead part '{w.name} bead': draw it "
+            "(the weld's right-click, Model the bead) or set it back to a light weld"
+            for w in getattr(component, "welds", [])
+            if w.formulation == "modelled" and w.type == "fillet" and f"{w.name} bead" not in parts
+        ]
+        problems += [  # ADR-19: one weld is modelled and checked as one fillet, so far
+            f"weld '{w.name}' is on the {w.sides} side: only the arrow side is modelled so "
+            "far; add the other side as a weld of its own"
+            for w in getattr(component, "welds", [])
+            if w.sides != "arrow"
+        ]
         problems += [  # ADR 0076: a thread's own list, never a plain tie or contact pair
             f"{self.name} does not support a threaded {c.type} contact ('{c.name}')"
             for c in component.contacts

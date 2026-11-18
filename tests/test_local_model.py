@@ -107,7 +107,41 @@ def test_the_choice_goes_in_agent_toml(monkeypatch):
     pick.choose("mid:8b", "http://localhost:11434/v1")
     s = load_settings()
     assert (s.provider, s.model) == ("local", "mid:8b")
-    assert s.picked.endswith(f"suite {evals.SUITE_VERSION}")
+    assert s.picked.endswith(f"suite {evals.SUITE_VERSION} model mid:8b")
+
+
+def test_the_suite_is_named_only_for_the_model_it_measured(monkeypatch, tmp_path):
+    """ADR-E-11: a model chosen after the pick (the chip, Settings) was named in history
+    with the pick's suite, a measurement that never happened."""
+    from puzzle.agent.settings import load_settings, save_settings
+
+    pick.choose("mid:8b", "http://localhost:11434/v1")
+    picked = load_settings().picked
+    assert pick.suite_of(picked, "mid:8b") == evals.SUITE_VERSION
+    assert pick.suite_of(picked, "claude-sonnet-5-5") == ""
+    assert pick.suite_of("2026-11-04 suite 2026.11", "mid:8b") == ""  # an older note
+    s = load_settings()
+    s.provider, s.model = "anthropic", "claude-sonnet-5-5"
+    save_settings(s)
+    from puzzle.agent import agent as built_in
+    from puzzle.agent.providers import ScriptedProvider
+
+    seen, real = {}, built_in.build_server
+
+    def build(root, name, **kw):
+        seen.update(kw)
+        return real(root, name, **kw)
+
+    monkeypatch.setattr(built_in, "build_server", build)
+    for model, suite in (("claude-sonnet-5-5", ""), ("mid:8b", evals.SUITE_VERSION)):
+        provider = ScriptedProvider([])
+        provider.model = model
+        from puzzle.model.schema import Project
+        from puzzle.project import save_project
+
+        save_project(Project(name="p"), tmp_path / model.replace(":", "-"))
+        built_in.Agent(tmp_path / model.replace(":", "-"), provider)
+        assert (seen["model"], seen["suite"]) == (model, suite)
 
 
 def test_every_task_has_a_family_and_the_core_ones_are_covered():

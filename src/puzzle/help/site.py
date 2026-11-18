@@ -85,7 +85,7 @@ def _equation(tex: str, display: bool, fmt: str) -> str:
 def page_html(page: manual.Page, fmt: str = "svg") -> str:
     """A page's body as HTML: TeX as images, headings with anchors (their slug and each
     help key marked before them), links still in help:/puzzle: form."""
-    from puzzle.gui.agent_view import DISPLAY_TEX, INLINE_TEX, segments
+    from puzzle.markup import DISPLAY_TEX, INLINE_TEX, segments
 
     md, holes = _markdown(), {}
 
@@ -315,6 +315,15 @@ def build_pdf(path: Path) -> dict:
     import os
 
     import matplotlib
+
+    try:  # Qt prints the PDF (QTextDocument to QPdfWriter): the one Qt path in help
+        import PySide6  # noqa: F401
+    except ImportError as exc:
+        from puzzle.errors import PuzzleError
+
+        raise PuzzleError("the PDF manual is printed by Qt and needs PySide6 (pip install "
+                          "puzzle-fem[gui]); the site builds without it",
+                          code="unsupported") from exc  # fmt: skip
     from PySide6.QtCore import QMarginsF, QUrl
     from PySide6.QtGui import (
         QFont,

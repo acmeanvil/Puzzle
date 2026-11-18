@@ -663,6 +663,13 @@ Change a study's solver settings (ADR 0023) in one edit, one undo: `shared` = {k
 
 Arguments: `expert`, `rationale`, `shared`, `solvers`, `study`.
 
+<!-- key: mcp:solver_shootout -->
+### solver_shootout
+
+A solver shoot-out (ADR 0011): the study solved by its own solver and by `solvers` (others, by key: calculix, code_aster, elmer, fenicsx, code_saturne, openfoam; default the study's shootout.solvers) on one mesh, compared by the study's shoot-out metrics, else each physics' first result node by node (relative L2 within 1 %; eigenfrequencies for modal and buckling steps). Returns each comparison's value, tolerance and pass, each solver's run id, the settings each solver was given beyond its defaults, and a Markdown table; the report is kept with the results. A run: the autonomy level decides (a proposal at propose) and every fresh solve counts against the budget.
+
+Arguments: `solvers`, `study`.
+
 <!-- key: mcp:solvers_list -->
 ### solvers_list
 
@@ -719,7 +726,7 @@ Load a group of tools by area (the built-in agent starts with a core set; readin
 - results: more results: derived results, probes and paths, integrals, histories, exports, solver logs
 - operators: operators, recipes and the schematic: values, adding, wiring, exports
 - optimisation: design of experiments and optimisers
-- solvers: solvers here, their settings, remote hosts, the job runner
+- solvers: solvers here, their settings, solver shoot-outs, remote hosts, the job runner
 - project: versions, archives, the skills list
 
 Arguments: `group`.

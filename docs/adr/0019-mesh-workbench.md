@@ -108,3 +108,12 @@ SMESH's quality controls (about 27 measures) are the reference for item 5.
 ## Amended (2026-11-17, ADR 0090 package 9)
 
 Netgen refuses conflicting sizes on one selection, as Gmsh does.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+The Decision heading's "(proposed)" and the Built section's "Not yet:
+sweeping, and a recipe mode that meshes block-like bodies with hexahedra and the rest
+with tetrahedra" are overtaken (ADR-E-10): swept prisms, revolved profiles, bends,
+decomposed bodies and mixed hex-tet recipes tied at their faces were built on
+2026-11-13 and 14 (ADR 0072 section 5; CLAUDE.md's "Hexahedra and tetrahedra in one
+recipe" and "Revolved and swept hexahedra").

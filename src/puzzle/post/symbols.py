@@ -23,11 +23,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from puzzle.gui.theme import LIGHT as _VIEW
+from puzzle.look import LIGHT as _VIEW
 from puzzle.mesh.adjacency import CORNERS
 from puzzle.mesh.mesh import Mesh
 
-# The colours are the theme's tokens (ADR 0045; theme.py imports no Qt), the light
+# The colours are the theme's tokens (ADR 0045; `puzzle.look`, no Qt), the light
 # set's, since the 3D view stays light in every theme.
 BLUE, RED, ORANGE, GREEN, GREY, PURPLE = _VIEW.symbols
 # Bolts (ADR 0050): a colour of their own, brass by default, apart from loads, supports
@@ -142,7 +142,7 @@ def symbols(
     physics; `skip`: those numbers left out, hidden in the view; `skip_bolts`: bolts left
     out, by name). `entities_of(selection)` gives a selection's (dim, tag) faces;
     `project` resolves features given in local axes (ADR 0037), drawn along those axes."""
-    from puzzle.gui.choices import label
+    from puzzle.labels import label
 
     out: list[Glyphs] = []
     n = -1

@@ -353,3 +353,24 @@ platform or a list on demand; signing and notarization ready to switch on.
 - How long the Linux machine stays up when idle before it stops.
 - The order of the native ports in decision 4. They are speed-ups, so they can wait until
   the installers work.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Decision 9 (licences) is built for what can be built without an installer
+(ADR-57): `puzzle.licences` gathers each environment's packages from its
+`conda-meta` records, with their SPDX licence and the licence texts their packages carry
+(`info/licenses`); `scripts/collect_licences.py OUT` writes the folder (an index, each
+package's texts, Puzzle's GPL and the written source offer, `SOURCE-OFFER.txt`) from the
+pixi environments the installer is made from; `scripts/make_installer.py --licences OUT`
+puts it in the installer as `<prefix>/licenses/` (constructor's `extra_files`); Help →
+Licences lists it, or the running environments in a checkout. The installer itself was
+not built with it here. The offer's wording (three years, on request through the issue
+tracker) is the maintainer's to approve.
+
+Also (ADR-56, ADR-58, ADR-61): the Linux machine is reached directly (`wsl --exec`), not
+through the job runner, and decision 4's "comes home checked against its manifest" is
+not built; a failed copy-back of a staged case now fails the run (`transfer_failed`),
+the case kept there. The memory preference for the Linux machine is not built: WSL's own
+default applies. Step 5 is begun (the machine, Repair, staging are built; step 4's
+"Repair is not built yet" is overtaken). Decision 3's "nothing downloaded at first
+launch" is overtaken by images pulled on first use (ADR 0072).

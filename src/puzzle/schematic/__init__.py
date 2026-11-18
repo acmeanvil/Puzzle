@@ -26,7 +26,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from uuid import UUID
 
-from puzzle.gui.theme import LIGHT as _LIGHT
+from puzzle.look import LIGHT as _LIGHT
 from puzzle.model.schema import (
     Component,
     Geometry,
@@ -104,7 +104,7 @@ KIND_WORDS = {
 # What flows along a data wire, for its colour (as Blender colours sockets by type).
 FLOWS = ("temperature", "displacement", "stress", "pressure", "velocity", "other")
 # Their colours on a light ground (the SVG export; the GUI's come from its theme).
-# They are the theme's tokens (ADR 0045; theme.py imports no Qt), its light set's.
+# They are the theme's tokens (ADR 0045; `puzzle.look`, no Qt), its light set's.
 FLOW_COLOURS = dict(_LIGHT.flows)
 STATE_COLOURS = dict(_LIGHT.states)
 

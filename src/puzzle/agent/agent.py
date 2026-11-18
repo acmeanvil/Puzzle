@@ -147,14 +147,15 @@ class Agent:
 
         self.root = Path(root)
         self.provider = provider
+        from puzzle.agent.pick import suite_of
         from puzzle.agent.settings import load_settings
 
-        picked = load_settings().picked  # "date suite version", when picked (ADR 0022)
+        model = getattr(provider, "model", "") or ""
+        # the pick's suite only for the model it measured (ADR 0022; ADR-E-11)
+        suite = suite_of(load_settings().picked, model)
         self._stop = _TurnStop()
-        self.server = build_server(self.root, NAME, outside=False,
-                                   model=getattr(provider, "model", "") or "",
-                                   suite=picked.split("suite ")[-1] if "suite " in picked
-                                   else "", cancel=self._stop)  # fmt: skip
+        self.server = build_server(self.root, NAME, outside=False, model=model, suite=suite,
+                                   cancel=self._stop)  # fmt: skip
         self.images = (not provider.remote) if images is None else images
         if max_rounds is None:
             max_rounds = MAX_ROUNDS_REMOTE if provider.remote else MAX_ROUNDS

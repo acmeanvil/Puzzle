@@ -230,3 +230,24 @@ page or GitHub Pages) is the maintainer's to choose.
 - **Sphinx with autodoc over the Python API:** it documents code, not use. The reference
   here comes from the model's data (catalog, settings, capabilities), which is what users
   meet.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Built since (ADR-E-1, ADR-E-2):
+
+- Links that open a tool: in the Help window each menu location a page names gets an
+  "Open …" link under its picture (`pictures.with_pictures(links=True)`), `puzzle:menu/<slug>`,
+  which runs that menu item (`help_viewer.open_tool`, `main_menu.action_for`; a submenu
+  opens where the pointer is). The site and the PDF leave them out. A test resolves
+  every named location and every `puzzle:` link written in a page.
+- F1 on a menu item: while a menu is open Qt gives F1 to the menu, so an application
+  event filter reads its highlighted item's path and opens the guide that names it, at
+  the heading above the first mention (`help.menu_place`).
+- F1 on the schematic: with one node selected, its entry opens (`operator:<type>`,
+  `feature:<type>`, `kind:<kind>`) before the panel's page.
+
+Tests: `tests/test_help_links.py`. Still as the Built text says, not the Decision's
+stronger words (ADR-E-3, ADR-E-4, ADR-E-5): pictures are checked for being named and
+present, not for matching what the GUI draws now; elements are held by the reference
+page's staleness test, with no key per element; the knowledge pack indexes
+`src/puzzle/help/`, not `docs/help/`.

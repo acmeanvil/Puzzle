@@ -5,7 +5,7 @@
     provider = "anthropic"          # a catalog id (`agent/catalog.py`) or "compatible:<name>"
     model = "claude-sonnet-5-5"
     embed_model = "nomic-embed-text"         # optional: knowledge search by meaning
-    picked = "2026-11-04 suite 2026.11"      # set by `puzzle agent pick` (ADR 0022)
+    picked = "2026-11-04 suite 2026.11 model qwen3:8b"  # set by `puzzle agent pick`
     send_images = false             # every provider's default for sending files
 
     [providers.openai]              # only what differs from the catalog
@@ -140,7 +140,7 @@ class AgentSettings:
     api_key_env: str = ""  # an old file's key variable: likewise
     send_images: bool | None = None  # every provider's default for send_files
     embed_model: str = ""  # an embedding model on the local endpoint, for knowledge search
-    picked: str = ""  # "2026-11-04 suite 2026.11": when `puzzle agent pick` chose the model
+    picked: str = ""  # "2026-11-04 suite 2026.11 model M": when `agent pick` chose M
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
 
     def migrate(self) -> None:

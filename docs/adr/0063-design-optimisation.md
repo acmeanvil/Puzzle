@@ -448,3 +448,10 @@ This closes the ADR. Left for later, and not holding it open:
 - Running a generation's points in parallel.
 - Points as `Iteration` progress events.
 - A plot of a surface over two variables at once (slices one at a time now).
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+The Decision names optuna for the Bayesian method; it is not used (its GP
+needs PyTorch). Bayesian optimisation is Puzzle's own Gaussian process
+(`surrogates.fit_gaussian`, Matérn 5/2, expected improvement), as the phase 3 section
+says; the index row now says so.

@@ -54,7 +54,7 @@ def point_cloud(mesh, results, step, quantity, selection, path: Path, units: str
     xyz = mesh.node_coords(ids)
     length, scale, unit = "m", 1.0, item.unit
     if units == "display":
-        from puzzle.gui.viewport import _display
+        from puzzle.model.units import to_display as _display
         from puzzle.settings import length_unit
 
         length, per_metre = length_unit()

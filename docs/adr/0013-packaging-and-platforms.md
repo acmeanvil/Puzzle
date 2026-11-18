@@ -44,3 +44,12 @@ conda-forge solver packages, checked 2026-10-17:
 ## Amended (2026-11-18, ADR 0090 package 15)
 
 A second workflow, `solvers.yml`, runs weekly and by hand what the per-push CI can't: Code_Aster from its pixi environment, Elmer, Code_Saturne and OpenFOAM in images built from `containers/` (saved into the Actions cache by a hash of their folder), OpenCourant from its pinned image and CalculiX's heavy solves with PARDISO built on the runner, a Linux job each, failing when its solver is missing. The per-push CI installs PyNite.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+"Runtime chosen per solver ... native when the solver is installed, else a
+container" no longer describes Windows or OpenCourant (ADR-E-23): `CONTAINER_FIRST`
+takes the image first for FEniCSx, Elmer and Code_Aster on Windows (the reasons were
+measured: no PETSc on win-64, a segfaulting Elmer build, Code_Aster 10-23 % faster) and
+for OpenCourant on every system; ADR 0068 step 5 adds a WSL machine. OpenFOAM has no
+pixi environment (ADR 0016's amendment).

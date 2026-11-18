@@ -29,3 +29,18 @@ Meshing sits between geometry and solver and drives much of commercial tools' us
 
 - Salome SMESH: capable, but hard to use outside Salome.
 - Leaving meshing to each solver's tools: inconsistent and breaks the single-model goal.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Two sentences no longer describe the code (ADR-E-21, ADR-E-22):
+
+- "CFD meshing for Code_Saturne uses Gmsh with boundary layers": a boundary layer on
+  Gmsh is refused ("boundary layers are meshed by Netgen"), and Netgen grows them. No
+  CFD test or benchmark has meshed with one yet: the channels use uniform hexahedra,
+  which is why their wall functions are benchmarked at Re 1e5. The CFD adapters read
+  prisms, untested. Read it as "Netgen boundary layers, not yet benchmarked for CFD";
+  a channel on a Netgen recipe with a layer, against the laminar closed form, is the
+  check before it is claimed (ADR 0072's list).
+- "the solver ties them (CalculiX `*TIE`, Elmer mortar tie contact)": Elmer's tie is not
+  written; its adapter claims conformal bonding only and refuses the rest (since
+  2026-11-09, ADR 0072).

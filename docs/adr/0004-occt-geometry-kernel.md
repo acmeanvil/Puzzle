@@ -32,3 +32,12 @@ STEP import uses Gmsh's built-in OpenCASCADE kernel, the same kernel without a s
 - FreeCAD as the engine: rich features, but heavy coupling to its application architecture.
 - pythonocc-core: equivalent kernel access; OCP is chosen because build123d and CadQuery build on it.
 - A mesh-only workflow (import meshes, no CAD): fails the "geometry creation and modification" goal.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Overtaken (ADR-34). Neither build123d nor FreeCAD is used. Geometry is OCCT
+through two bindings: OCP for the parametric history, naming, measuring and STEP export
+(`puzzle.geometry.history`, `naming`, `measure`, ADR 0014), and Gmsh's own OCC kernel
+for import, healing and meshing (`puzzle.geometry`, ADR 0005). The only mention of
+build123d left in `src/` is a docstring. FreeCAD's `.FCStd` files are not read; that
+importer is on ADR 0072's list. Read ADR 0014 for the current decision on geometry.

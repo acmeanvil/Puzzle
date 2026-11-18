@@ -267,3 +267,36 @@ def plain(unit: str) -> str:
     out = unit.strip().replace("²", "^2").replace("³", "^3").replace("·", "*")
     out = out.replace("µm", "um").replace("°C", "degC").replace("°F", "degF")
     return out
+
+
+def to_display(values, kind: str | None):
+    """SI values in the display unit of their kind (ADR 0024), and that unit's name.
+
+    The core's exports and the GUI's view both read values this way (the view as
+    `gui.viewport._display`); it lives here so the core never imports the GUI."""
+    import numpy as np
+
+    from puzzle.settings import current
+
+    if kind is None:
+        return values, None
+    si, target = DIMENSIONS[kind][1], current().display_units()[kind]
+    if target == si:
+        return values, pretty(si)
+    converted = registry().Quantity(np.asarray(values, float), si).to(target).magnitude
+    return np.asarray(converted), pretty(target)
+
+
+def from_display(values, kind: str | None):
+    """Values typed in the display unit of their kind, in SI: `to_display` the other way."""
+    import numpy as np
+
+    from puzzle.settings import current
+
+    values = np.asarray(values, float)
+    if kind is None:
+        return values
+    si, shown_unit = DIMENSIONS[kind][1], current().display_units()[kind]
+    if shown_unit == si:
+        return values
+    return np.asarray(registry().Quantity(values, shown_unit).to(si).magnitude)

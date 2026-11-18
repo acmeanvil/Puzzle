@@ -217,3 +217,22 @@ Opening another project while a solve started in the window runs asks "Stop the 
 ## Amended (2026-11-18, ADR 0090 package 14)
 
 A local job's stored spec leaves out environment variables that hold keys, tokens or passwords (by name, and every provider's key variable).
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Three things the record says are short of the code (ADR-53, ADR-55):
+
+- On Windows the runner is off for remote hosts too (`jobs.service.enabled` needs
+  POSIX), so a Windows user's Slurm or PBS run uses ADR 0021's driver: no resume, no
+  manifest-checked fetch, nothing in Jobs. The record is "POSIX clients only" until the
+  client side runs on Windows (ADR 0072's list); the help says so.
+- Queueing for memory: a local job states no memory, so local jobs queue for cores only;
+  an unscheduled remote job had claimed the host's whole `memory_gb` (the runner's own
+  limit) and so ran one at a time. It now claims what its run asks for; a scheduler's
+  request still defaults to the host's. And the queue is first come, first served for
+  unscheduled jobs: a small later job no longer passes an earlier large one for ever.
+- "A failed or partial fetch leaves the remote case alone, to be fetched again" held
+  only for successful runs (ADR-54): a failed or stopped job whose fetch failed was
+  forgotten. It stays pending now, said in the log.
+
+Tests: `tests/test_runner_queue_and_fetch.py` (on any system).

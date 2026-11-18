@@ -140,3 +140,14 @@ A turn is an undo unit: an agent's changes carry `actor.turn`, and `Session.undo
 ## Amended (2026-11-18, ADR 0090 package 14)
 
 A session keeps its project between its own changes and reads it again under the lock only when another client wrote (the files' sizes, times or inodes changed) or what it holds no longer hashes as written. A run's folder is made exclusively, so two runs started in one second get one each.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+The MCP exposure setting is built per project, not as a preference (ADR-34
+read it as missing): the project's `agent.mcp` is "off" (outside clients are refused),
+"local" or "network", set by Project → Who may connect… (`SetAutonomy.mcp`). "network"
+still serves over stdio: the network transport with authentication is on ADR 0072
+section 9. Since this record, the command layer's gates (every solve an agent starts is
+a run command checked against the level and the budget, ADR 0090 package 3), tool
+groups (package 12) and the providers (ADR 0084) are the current decisions; read ADR
+0090's Progress for them.

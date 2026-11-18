@@ -180,6 +180,30 @@ def lookup(key: str) -> tuple[Page, str | None] | None:
     return None
 
 
+def menu_place(menu_path: str) -> tuple[Page, str | None] | None:
+    """The page and heading that explain a menu item (F1 on an open menu, ADR 0083
+    decision 2; ADR-E-2): the first guide (then any page) naming the path, at the heading
+    above the first mention; else one naming the nearest menu above it ("Model → Studies"
+    for "Model → Studies → New study…")."""
+    from puzzle.help.pictures import ARROW, menu_mentions
+
+    words = menu_path.split(ARROW)
+    ordered = sorted(pages().values(), key=lambda p: (p.section != "guide", p.order, p.name))
+    while len(words) > 1:
+        wanted = ARROW.join(words)
+        for page in ordered:
+            if page.name.startswith("reference/"):
+                continue
+            hits = [i for i, m in menu_mentions(page.body, [wanted]) if m == wanted]
+            if hits:
+                lines = page.body.splitlines()[: hits[0] + 1]
+                heading = next((HEADING.match(x).group(2) for x in reversed(lines)
+                                if HEADING.match(x)), None)  # fmt: skip
+                return page, heading
+        words.pop()
+    return None
+
+
 def contents() -> list[tuple[str, list[Page]]]:
     """(section heading, its pages in order) for every section that has pages."""
     out = []

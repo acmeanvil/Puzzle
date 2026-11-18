@@ -182,7 +182,7 @@ def thread_command(comp, contact: str, thread, type: str | None = None):
 def writers(project, comp, kind: str) -> list[str]:
     """The component's study solvers that write a threaded `kind` contact (ADR 0076)."""
     from puzzle.adapters import available_adapters
-    from puzzle.gui.choices import solver_label
+    from puzzle.labels import solver_label
     from puzzle.model.schema import Study
 
     adapters = available_adapters()

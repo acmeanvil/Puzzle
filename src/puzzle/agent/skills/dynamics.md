@@ -66,10 +66,10 @@ linear eigenvalue solve: one result step per mode, its value the load factor.
 
 | | CalculiX | Code_Aster | Elmer | FEniCSx |
 | --- | --- | --- | --- | --- |
-| Transient direct | yes | yes | yes | yes (3D only) |
+| Transient direct | yes | yes | yes | yes (3D and 2D) |
 | Transient modal | yes | refused | refused | refused |
 | `hht_alpha` | yes | yes | refused | yes |
-| Harmonic | modal always (`modes`) | direct | direct | direct (3D only) |
+| Harmonic | modal always (`modes`) | direct | direct | direct (3D and 2D) |
 | `damping_ratio` | modal and harmonic | refused | refused | refused |
 | Buckling | yes (no `shift`) | yes | refused | refused |
 

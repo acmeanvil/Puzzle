@@ -149,6 +149,18 @@ class RunMeshShootout(_Command):
     solves: ClassVar[bool] = True
 
 
+class RunShootout(_Command):
+    """A study solved by its own solver and others on one mesh, compared (ADR 0011);
+    `solvers` for this run in place of the study's shoot-out solvers."""
+
+    command: Literal["run_shootout"] = "run_shootout"
+    study: str
+    solvers: list[str] | None = None
+    undoable: ClassVar[bool] = False
+    edits_model: ClassVar[bool] = False
+    solves: ClassVar[bool] = True
+
+
 class SetAutonomy(_Command):
     """Change what agents may do here. Users only; "act" needs a second confirmation."""
 
@@ -173,6 +185,7 @@ Command = Annotated[
     | RunConvergence
     | RunAdapt
     | RunMeshShootout
+    | RunShootout
     | SetAutonomy,
     Field(discriminator="command"),
 ]

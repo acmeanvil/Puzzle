@@ -174,3 +174,8 @@ point elements with `K_T_D_N` on one-node groups. Both serve `elastic_support` a
 ## Amended (2026-11-17, ADR 0090 package 9)
 
 The share that raises the warning is per body: its springs' forces summed node by node, against the force through that body's own contacts (the supports' reactions where there are no contact results).
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+The lift-off benchmark named in the Decision is not done (the index row said
+it was); it stays on ADR 0072's list.

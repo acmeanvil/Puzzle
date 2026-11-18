@@ -27,3 +27,24 @@ Open-source solvers differ in formulation, element technology and defaults. User
 
 - Duplicate the study per solver: works today, but loses the link between the runs and clutters the schematic.
 - Benchmark suite only: verifies solvers on reference problems, not on the user's actual model.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+The shoot-out had no way in from any client (ADR-7): `run_shootout` was
+called only by two integration tests. Now it is a run command, `run_shootout`, in the
+session (the autonomy level, the budget per fresh solve, the history entry, the version
+before the run), behind:
+
+- the GUI: Model → Run → Run shoot-out… and a study's right-click (`gui/solver_shootout.py`:
+  the solvers whose capabilities take the study, in one form; the comparison as the
+  Solver shoot-out tab);
+- the CLI: `puzzle run PROJECT --study NAME --shootout [SOLVER ...]`;
+- MCP: `solver_shootout(study, solvers)`.
+
+`shootout.shootout_report` runs it: the solvers named for this run (else the study's
+`shootout.solvers`), the study's metrics, else `shootout.default_metrics` (each solved
+physics' first output node by node, relative L2 within 1 %; eigenfrequencies for modal
+and buckling steps). Each solver's run is stored and reused as any run; the report is
+kept as `results/shootout/<study id>.json`. Tests: `tests/test_solver_shootout.py`.
+Not built: the difference field, and comparison by mapping when meshes or element types
+differ (the solvers share one mesh, so ids match); both are on ADR 0072's list.

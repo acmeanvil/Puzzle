@@ -168,12 +168,15 @@ class Runner:
             busy = [j for j in local if j.state == "running"]
             cores = sum(j.cores for j in busy)
             memory = sum(j.memory_gb for j in busy)
+            waiting = False  # ADR-55: local jobs start in the order they came, so a small
+            # later one never passes an earlier large one for ever; scheduled ones go on
             for job in sorted((j for j in jobs if j.state == "queued" and not j.native_id),
                               key=lambda j: j.submitted):  # fmt: skip
                 scheduled = (job.spec.get("scheduler") or "none") != "none"
                 fits = (not busy or (cores + job.cores <= self.cores and (
                     not self.memory_gb or memory + job.memory_gb <= self.memory_gb)))  # fmt: skip
-                if not scheduled and not fits:
+                if not scheduled and (waiting or not fits):
+                    waiting = True
                     continue
                 try:
                     self.backend(job).start(job)

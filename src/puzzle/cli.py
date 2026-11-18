@@ -200,6 +200,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=float, help="seconds before the solver is stopped")
     p.add_argument("--host", help="run on this remote host (puzzle hosts list), this once")
     p.add_argument(
+        "--shootout", nargs="*", metavar="SOLVER",
+        help="a solver shoot-out (ADR 0011): the study's solver and these others (default: "
+        "the study's shoot-out solvers) on one mesh, compared",
+    )  # fmt: skip
+    p.add_argument(
         "-v", "--verbose", "--log", action="store_true",
         help="print the solver's whole log instead of a one-line progress status",
     )  # fmt: skip
@@ -811,6 +816,10 @@ def _run(args) -> int:
         studies = run_queue.in_order(project)
     else:
         studies = run_queue.in_order(project, [_study(project, n).id for n in args.study])
+    if getattr(args, "shootout", None) is not None:
+        if len(studies) != 1:
+            raise CliError("a shoot-out runs one study: name it with --study")
+        return _run_shootout(args, studies[0])
     if len(studies) == 1:
         return _run_one(args, studies[0])
 
@@ -825,6 +834,25 @@ def _run(args) -> int:
             print(f"{o.study.name} failed: {o.error}")
     print(run_queue.summary(done))
     return 0 if all(o.ok for o in done) else 1
+
+
+def _run_shootout(args, study) -> int:
+    """`puzzle run --shootout`: the session's run_shootout, its table printed."""
+    from puzzle.commands import Session
+    from puzzle.commands.model import RunShootout
+
+    others = ", ".join(args.shootout) or "its shoot-out solvers"
+    print(f"Shoot-out of '{study.name}': {study.solver} and {others} ...")
+    outcome = Session(args.project).submit(
+        RunShootout(study=str(study.id), solvers=args.shootout or None),
+        on_output=print if args.verbose else None,
+    )
+    report = outcome.run
+    print(report["table"])
+    print(
+        "All within tolerance." if report["passed"] else "Some differ by more than their tolerance."
+    )
+    return 0 if report["passed"] else 1
 
 
 def _run_one(args, study) -> int:
@@ -957,8 +985,11 @@ def _progress(args) -> int:
         title = f"{record.study_name} ({record.solver}, run {record.run_id[:8]})"
     summary = progress.summary(events)
     if args.plot is not None:
-        from puzzle.gui.solution_panel import save_png
-
+        try:  # the picture is the GUI's Solution panel, drawn off screen
+            from puzzle.gui.solution_panel import save_png
+        except ImportError as exc:
+            raise CliError(f"--plot draws the GUI's Solution panel and needs PySide6 "
+                           f"(pip install puzzle-fem[gui]): {exc}") from exc  # fmt: skip
         save_png(events, title, args.plot)
         print(f"Saved {args.plot}")
     if args.json:

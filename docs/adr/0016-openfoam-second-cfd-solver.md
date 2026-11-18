@@ -45,3 +45,11 @@ The two solvers agree cell by cell on the laminar channel (shoot-out, same mesh)
 - OpenFOAM Foundation line: not on conda-forge, so no native Linux path through pixi.
 - SU2 as the second CFD solver: strong for compressible aerodynamics, weaker for the incompressible and thermal cases Puzzle benchmarks first.
 - No second CFD solver (ADR 0012 as it stood): leaves CFD as the only physics without an independent check.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Decision 1's "It runs natively from conda-forge on Linux" is not built
+(ADR-E-24): `pixi.toml` has no OpenFOAM environment, so OpenFOAM runs in its container
+on every system unless the user puts `simpleFoam` on PATH. A linux-64 `openfoam` feature
+pinned to v2412 and a Linux CI job running the laminar channel natively would make it
+true; native Linux is proposed for ADR 0072's list beside macOS and Windows.

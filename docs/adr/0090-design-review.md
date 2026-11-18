@@ -949,6 +949,60 @@ failed (a test file read before its expectation was updated; it passes).
   on the next push; nobody here has the machine); `fenicsx_has_petsc` probes the native
   FEniCSx on Windows though solves run in the image (five tests skipped here).
 
+**Package 15, first run of `solvers.yml` on GitHub (2026-11-18):** five of seven jobs
+passed: OpenFOAM (15 tests), Code_Saturne (18), the CFD shoot-out (3), OpenCourant (22)
+and the heavy CalculiX solves (5 in 1 h 29 min, the Belleville stacks 68 min with
+PARDISO built on the runner). Elmer failed 1 of 119: a chosen conjugate-gradient solve
+stalled at a residual of 1.5e-9 against the 1e-10 Puzzle wrote and then divided by zero;
+a chosen iterative method is now written at 1e-8, as the adapter's own CG solves.
+Code_Aster failed 1 of 240: the plain mean of a contact's nodal pressures was 1.11 % from
+the applied pressure on Linux's native build (the force was exact); that mean is now held
+to 2 %. Neither fix had run on GitHub when this was written. A matrix `include` entry
+outside the asked list becomes a job, so the list is filtered in a first job; GitHub
+dispatches a workflow by hand only from the default branch, so the workflow also runs on
+a push that changes it or `containers/`.
+
+**Package 16 built (2026-11-18):** Records and reach. The unit suite: 4805 passed, 83
+skipped (the subagent's run).
+
+- ADR-7: the solver shoot-out is a run command (`run_shootout`, gated and budgeted as
+  other runs) behind Model → Run → Run shoot-out…, a study's right-click,
+  `puzzle run --shootout` and MCP `solver_shootout`; its report is kept in
+  `results/shootout/`. Left: the difference field, and comparing by mapping when meshes
+  differ.
+- ADR-16, ADR-20: thread results as a Threads tab in the Contact tool; a weld's Model the
+  bead / Back to a light weld and Model → Bolts and fasteners → Weld bead…. ADR-19: a
+  modelled fillet with no bead and a weld on a side other than arrow are refused.
+- ADR-E-1, E-2: a help page's `puzzle:menu/<slug>` link opens its menu item; F1 on an open
+  menu's item and on a selected schematic node.
+- ADR-E-16: the core imports no GUI. Shared pieces moved to `puzzle.look` (tokens),
+  `puzzle.labels`, `puzzle.markup`, `puzzle.model.descriptions` and `units.to_display`;
+  `tests/test_core_without_gui.py` allows only `puzzle gui`, `progress --plot` and the
+  PDF manual.
+- ADR-57: `puzzle.licences`, `scripts/collect_licences.py` (838 packages over nine
+  environments here, 49 with a licence named but no text found),
+  `make_installer.py --licences`, Help → Licences and the GPL's written offer of source.
+  The installer was not built with it; the offer's wording is the maintainer's to approve.
+- ADR-39, ADR-49: skills `cfd`, `custom-pde` and `shells`; guides for fluid flow and
+  custom PDEs, ADR 0065's operations in the geometry guide, sections on solvers on this
+  computer, the 3D mouse and licences; `WITH_HELP` gains twelve ADRs.
+- Records: about 45 index rows brought to what is built; amendments appended to 22 ADRs,
+  those on the overtaken 0004, 0007, 0010, 0012 and 0015 among them.
+- Fixes: a failed fetch keeps its job (ADR-54); the local queue is first come, first
+  served and an unscheduled remote job claims its run's memory (ADR-55); a failed WSL
+  copy-back fails the run, `transfer_failed` (ADR-56); a pick's suite is given only for
+  its own model (ADR-E-11); an empty settings block writes the default input on all
+  eight adapters (ADR-63); MCP round trips for step 5's operators (ADR-60); an archive
+  member with an empty name is refused (ADR-30).
+- Left, on ADR 0072's list: ADR-48 (faceted booleans as a history step), ADR-E-19 (which
+  input made a study stale), the job runner on Windows clients (ADR-53), the Linux
+  machine through the runner (ADR-56, 58), the parity test over references held by name
+  (ADR-59), Netgen boundary layers for CFD and native OpenFOAM on Linux (ADR-E-21, 24),
+  the low findings ADR-28, 29, 31, 41, 52.
+- Not run: a real shoot-out through the new command (stand-in solves), the Weld bead
+  form's real meshing, F1 inside a live open menu, the job runner's fixes on POSIX
+  (through `Runner.tick` with a stand-in), the installer with `--licences`.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

@@ -56,6 +56,9 @@ WITH_SKILLS = {
     "0065",
     "0066",
     "0076",
+    "0016",  # package 16: CFD on Code_Saturne and OpenFOAM (skill cfd)
+    "0012",  # package 16: custom PDEs on FEniCSx (skill custom-pde)
+    "0027",  # package 16: shells (skill shells; beams and bolts have their own)
 }
 
 

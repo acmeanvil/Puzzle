@@ -633,6 +633,21 @@ FEniCSx, threaded beam-bolt ends, and the modelled bolts of ADR 0077. Left:
   deferred); `feedback.StatusProgress._show` called after its window is deleted; the
   solver images published (GHCR) instead of cached; the CFD shoot-out's 1 % threshold
   in `benchmarks/channel_flow/build.py` at its measured 0.16 %; Elmer wedges written.
+- Left by ADR 0090 package 16: the shoot-out's difference field and comparison by
+  mapping (ADR-7); faceted booleans as a history step (ADR-48); a stale study naming
+  the input that changed (ADR-E-19); the job runner on Windows clients (ADR-53) and the
+  Linux machine through it, with its memory preference (ADR-56, 58); the parity test
+  over references held by name (ADR-59); OpenCourant's refusals (pressure on
+  second-order faces, shell offsets and field thickness, second-order beams, threads,
+  other contact types; ADR-66); Netgen boundary layers benchmarked for CFD and native
+  OpenFOAM on Linux (ADR-E-21, E-24); thread gates, lead torque, the `thread_axis` and
+  `thread_mesh` problems (ADR-14, 15); forms for `seismic_report` and weak springs
+  (ADR-41); archive link, size and ratio tests (ADR-30); a solve test of
+  `orient="edge"` (ADR-31); "since built" notes on 0021, 0027, 0035, 0038, 0076 to 0078
+  (ADR-29); 0064's rows D8, F4, B4, C6 and a `points_table` test (ADR-52); suite grades
+  (ADR-E-12); the runner's manifest skipping symlinks and `solver.log`, `kill_at` lost
+  on a runner restart (ADR-61); `runner/jobs.py` `Store.save` opening without an
+  encoding; the mesh shoot-out as a run command from the CLI and GUI.
 
 ### Found while collecting (fix soon, not deferrals)
 

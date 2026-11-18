@@ -255,12 +255,18 @@ def _through_runner(service, command, workdir, runtime, *, on_output, cancel, ti
         else:
             returncode = rc if rc not in (None, 0) else -1
         ok = returncode == 0 and not (cancelled or timed_out)
+        fetched = True
         try:
             service.finish(job, workdir, say, ok=ok)
-        except Exception:
+        except Exception as exc:
             if ok:  # the results are still there: the job stays pending, to fetch again
                 raise
-        if ctx is not None:
+            # ADR-54: a failed or stopped job whose files didn't come home stays pending
+            # too, so its logs can be fetched again or the job dismissed (Window → Jobs)
+            fetched = False
+            say(f"[puzzle] the job's files could not be fetched ({exc}); it stays in "
+                "Window → Jobs to fetch again or dismiss")  # fmt: skip
+        if ctx is not None and fetched:
             pending.remove(ctx.root, job)
         if parser is not None:
             emit(parser.safe(parser.poll))

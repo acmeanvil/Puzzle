@@ -317,7 +317,7 @@ def _csv(path: Path, centres, columns, units: str) -> Path:
     length, xyz = "m", centres
     shown = []
     if units == "display":
-        from puzzle.gui.viewport import _display
+        from puzzle.model.units import to_display as _display
         from puzzle.settings import length_unit
 
         length, per_metre = length_unit()

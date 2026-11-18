@@ -631,7 +631,7 @@ decline a proposal.
 
 solve a study.
 
-`puzzle run [-h] [--study STUDY] [--all] [--no-reuse] [--timeout TIMEOUT] [--host HOST] [-v] project`
+`puzzle run [-h] [--study STUDY] [--all] [--no-reuse] [--timeout TIMEOUT] [--host HOST] [--shootout [SOLVER ...]] [-v] project`
 
 | Argument | What |
 | --- | --- |
@@ -641,6 +641,7 @@ solve a study.
 | `--no-reuse` | solve even if an identical run is stored |
 | `--timeout` | seconds before the solver is stopped |
 | `--host` | run on this remote host (puzzle hosts list), this once |
+| `--shootout` | a solver shoot-out (ADR 0011): the study's solver and these others (default: the study's shoot-out solvers) on one mesh, compared |
 | `-v, --verbose, --log` | print the solver's whole log instead of a one-line progress status |
 
 <!-- key: cli:runs -->

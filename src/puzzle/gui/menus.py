@@ -441,6 +441,9 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
         from puzzle.gui.mesh_shootout import mesh_shootout
 
         add("Mesh shoot-out…", lambda: mesh_shootout(window, str(obj.id)))  # ADR 0019
+        from puzzle.gui.solver_shootout import solver_shootout
+
+        add("Run shoot-out…", lambda: solver_shootout(window, str(obj.id)))  # ADR 0011
         steps = menu.addMenu("Add step")
         for t in STEP_TYPES:
             action = steps.addAction(label(t))
@@ -500,8 +503,15 @@ def build_menu(window: MainWindow, node: Node) -> QMenu | None:
     elif isinstance(obj, Component) and node.kind == "weld":  # ADR 0078
         from puzzle.gui.weld_forms import weld_fatigue
 
-        name = obj.welds[int(node.path.split(".")[1])].name
+        weld = obj.welds[int(node.path.split(".")[1])]
+        name = weld.name
         add("Weld fatigue…", lambda: weld_fatigue(window, weld=name))
+        from puzzle.gui.weld_forms import light_weld, model_bead
+
+        if weld.formulation == "modelled":  # ADR 0078 step 4 (ADR 0090 ADR-20)
+            add("Back to a light weld", lambda: light_weld(window, obj, name))
+        else:
+            add("Model the bead", lambda: model_bead(window, obj, name))
         add("Remove", lambda: remove(window, obj, node.path))
     elif obj is not None and obj.kind == "bolt_type" and node.kind == "object":
         from puzzle.gui.vdi2230_form import vdi_check

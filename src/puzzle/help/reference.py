@@ -283,7 +283,7 @@ def results() -> str:
 
 
 def fields() -> str:
-    from puzzle.gui.form import DESCRIPTIONS
+    from puzzle.model.descriptions import DESCRIPTIONS
 
     lines = [_front("Properties fields", 80, "field",
                     "What each field in the Properties panel and Puzzle's forms means."),

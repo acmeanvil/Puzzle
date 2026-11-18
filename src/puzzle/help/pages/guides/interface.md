@@ -4,7 +4,7 @@ section: guide
 order: 10
 keys: panel:model, panel:properties, panel:view, panel:messages, kind:group, kind:labels, kind:units
 summary: Find your way round the window: the model tree, the Properties panel, the 3D view, the messages, layouts, units and undo.
-adrs: 0024, 0029, 0030, 0033, 0045
+adrs: 0024, 0029, 0030, 0033, 0045, 0068, 0069
 ---
 
 The window has four working areas: the model tree on the left, the Properties panel
@@ -70,6 +70,16 @@ Anything with a fixed set of values is a dropdown of readable names.
   their sections, Bolt force labels, Clear probes (Esc), Copy image and Save image….
 - The shortcuts work while the view has focus, never while you type.
 
+<!-- key: setting:mouse3d -->
+### A 3D mouse
+
+A SpaceMouse or a compatible 6-axis device steers the view when it is plugged in: push,
+pull and twist the cap. Settings > 3D mouse names the device found and sets its speed,
+whether the cap moves the model or the camera, turn only or move only, one axis at a
+time, each axis reversed on its own, and what its two buttons do (Fit all, Isometric,
+Refresh view, Section cut). The view turns about the point under its centre. On Linux
+Puzzle reads spacenavd when it runs, else the device directly.
+
 ## The messages area
 
 The Messages button folds the area below the view open or shut. Its tabs:
@@ -114,6 +124,13 @@ pressed again, the one before. Redo (Ctrl+Y or Ctrl+Shift+Z, Edit → Redo) puts
 what Undo took, until you make a new change. Their tooltips say what each would act
 on. While you are picking, Undo takes back the last pick first. Undo refuses when the objects have changed
 since; the History tab shows what each command did.
+
+## Licences
+
+Help → Licences lists every package Puzzle carries, by environment, with its licence;
+select one to read its licence texts. The offer of the source for the GPL programs it
+carries is on the same page. Puzzle itself is under the GNU General Public License,
+version 3 or later.
 
 ## Options worth knowing
 

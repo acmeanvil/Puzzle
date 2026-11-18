@@ -27,3 +27,13 @@ Open-source solvers are hard to install (Code_Aster), change behaviour between r
 
 - Linking solvers as libraries: licence entanglement and crash coupling.
 - Native installs only: the main source of user frustration in today's tools.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Overtaken (ADR-34): "The default runtime is a container image per solver" is
+no longer the decision. ADR 0013 made native solvers first, from pixi environments, with
+containers for the gaps; `jobs.runtime.CONTAINER_FIRST` takes the image first only for
+FEniCSx, Elmer and Code_Aster on Windows (measured there) and for OpenCourant
+everywhere, and ADR 0068 adds a WSL machine as a third runtime on Windows. "Out of
+process" holds for every solver. Read ADR 0013 and CLAUDE.md's Windows gotcha for the
+current choice per solver.

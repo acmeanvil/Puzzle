@@ -287,7 +287,8 @@ def _check_versions(z: zipfile.ZipFile, entries: list[zipfile.ZipInfo]) -> None:
 def _safe(name: str) -> str:
     """A member name that stays inside the destination, else an error."""
     p = PurePosixPath(name)
-    if name.startswith(("/", "\\")) or p.is_absolute() or ":" in p.parts[0] or ".." in p.parts:
+    if (not p.parts or name.startswith(("/", "\\")) or p.is_absolute() or ":" in p.parts[0]
+            or ".." in p.parts):  # fmt: skip  # an empty name is refused too (ADR-30)
         raise PuzzleError(f"the archive's member '{name}' points outside the project",
                           code="invalid_archive", path=name)  # fmt: skip
     return name

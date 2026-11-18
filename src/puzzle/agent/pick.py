@@ -350,8 +350,20 @@ def choose(model: str, base_url: str) -> Path:
     s = load_settings()
     s.provider, s.model = "local", model
     s.config("local").base_url = "" if base_url.rstrip("/") == LOCAL_URL else base_url
-    s.picked = f"{datetime.now(UTC).date().isoformat()} suite {evals.SUITE_VERSION}"
+    s.picked = (f"{datetime.now(UTC).date().isoformat()} suite {evals.SUITE_VERSION} "
+                f"model {model}")  # fmt: skip
     return save_settings(s)
+
+
+def suite_of(picked: str, model: str) -> str:
+    """The suite a history entry names for `model` (ADR 0022 decision 5): the pick's,
+    only when the model running is the one picked ("date suite V model M"). A model
+    chosen since by the chip or Settings was never measured by it (ADR-E-11); an older
+    note without its model can't say, so it names none."""
+    import re
+
+    m = re.fullmatch(r"(\S+) suite (\S+) model (.+)", (picked or "").strip())
+    return m.group(2) if m and m.group(3) == model else ""
 
 
 # --- remote models (ADR 0084 decision 9) ---------------------------------------------

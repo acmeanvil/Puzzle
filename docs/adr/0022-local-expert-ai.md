@@ -88,3 +88,19 @@ Not done:
 ## Amended (2026-11-18, ADR 0090 package 12)
 
 Suite 2026.11.2: the bracket assembly as a second project and families for memory (a follow-up message), contacts, bolts and injection (a solver log carrying an instruction). Evals give every model 16 rounds so scores compare; requests are counted per message.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Provenance (decision 5) recorded the picked suite on every entry whatever
+model ran (ADR-E-11): `picked` was only "date suite V", so a model chosen later by the
+chip or Settings was named in history with a measurement it never had. The note is now
+"date suite V model M" (`pick.choose`), and `pick.suite_of` gives the suite only when
+the running model is M; an older note names none. Test:
+`tests/test_local_model.py::test_the_suite_is_named_only_for_the_model_it_measured`.
+
+Two Decision sentences are stronger than the build, and are read as built (ADR-E-12,
+ADR-E-13): four of the eight families have both grades (read, batch, sketch and mesh
+one each); the pack is indexed by BM25, an embedding model only re-ranking its top hits
+when `embed_model` is set; the French content is the progress translator's table, and
+35 of 80 note passages carry no link. The missing grades and the manual summaries go on
+ADR 0072's list.

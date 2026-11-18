@@ -333,3 +333,17 @@ def test_a_manifest_whose_members_are_not_a_table_is_refused(tmp_path):
     with pytest.raises(PuzzleError) as err:
         archive.read(bad, tmp_path / "out")
     assert err.value.code == "invalid_archive"
+
+
+@pytest.mark.parametrize("name", ["", "/etc/passwd", r"\\server\share\x", "C:/Windows/x",
+                                  "a/../../outside", "../x"])  # fmt: skip
+def test_member_names_outside_the_project_are_refused(name):
+    """ADR-30: absolute, drive and parent paths are refused, and an empty name too (it
+    had raised IndexError, not a coded refusal)."""
+    from puzzle.errors import PuzzleError
+    from puzzle.project.archive import _safe
+
+    with pytest.raises(PuzzleError) as err:
+        _safe(name)
+    assert err.value.code == "invalid_archive"
+    assert _safe("geometry/bar.toml") == "geometry/bar.toml"

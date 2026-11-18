@@ -222,7 +222,11 @@ class RemoteService(Service):
             "scheduler": h.scheduler,
             "owned": True,
             "resources": {"processes": r.processes, "threads": self.runtime.threads() or 1,
-                          "memory_gb": r.memory_gb or h.memory_gb,
+                          # ADR-55: a scheduler's request defaults to the host's memory;
+                          # unscheduled, that is the runner's whole limit (--memory-gb), so
+                          # a job claims only what its run asks for, or one ran at a time
+                          "memory_gb": r.memory_gb if h.scheduler == "none"
+                          else r.memory_gb or h.memory_gb,
                           "walltime": r.walltime or h.walltime,
                           "partition": r.partition or h.partition,
                           "account": r.account or h.account},

@@ -4,7 +4,7 @@ section: guide
 order: 150
 keys: panel:agent, panel:advisor
 summary: Ask the built-in agent to set up, check and explain a model, choose how much it may do, and follow the Advisor's next step.
-adrs: 0090, 0015, 0022, 0040, 0057, 0084
+adrs: 0090, 0015, 0022, 0040, 0057, 0074, 0084
 ---
 
 The agent is a built-in expert: ask it in plain words to build, check, run or explain

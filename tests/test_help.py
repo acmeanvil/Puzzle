@@ -75,6 +75,20 @@ WITH_HELP = {
     "0083",
     "0084",
     "0085",
+    # package 16 (ADR-42, ADR-49, ADR-61): pages that named these, now listed, and the
+    # new guides (flow, custom PDEs, ADR 0065's operations, solvers, the 3D mouse)
+    "0009",
+    "0010",
+    "0012",
+    "0016",
+    "0051",
+    "0053",
+    "0065",
+    "0068",
+    "0069",
+    "0070",
+    "0073",
+    "0074",
 }
 
 

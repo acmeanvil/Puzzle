@@ -76,3 +76,17 @@ Where geometry sits in the tree decides how it is shared:
 `run_study` runs or reuses each source study, maps the transferred field onto the target's mesh (`puzzle.transfer.map_field`: a node-by-node copy when the meshes are identical, otherwise linear interpolation in the source tetrahedra, or the nearest node) and passes it to the target adapter as an `Input`. Temperature loads from a thermal study into a structural one work on CalculiX and FEniCSx. Temperature loads reach CalculiX, FEniCSx, Code_Aster and Elmer. Prestress works on CalculiX by replaying the static source study as a large-deformation first step before perturbation steps, which requires the same component. Adapters refuse inputs they can't apply. The thermal bending benchmark matches beam theory within 1.6%, is stress-free away from the clamp, and gives the same answer on every solver pair.
 
 Studies with several solve steps run in one input where the solver allows it (CalculiX); elsewhere `run_study` runs one job per step on the same mesh and merges the results. Those steps are independent analyses.
+
+## Amended (2026-11-18, ADR 0090 package 16)
+
+Two parts of this record are not what is built (ADR-E-19, ADR-E-20):
+
+- "the UI names the changed input": a stale study says only "the model changed since
+  the last run". Runs record their run key, not the hash of each input, so status
+  cannot yet say which input changed. Not built; on ADR 0072's list (store each run's
+  per-input hashes and diff them in `project.status`).
+- "transfers as the only schematic edges": the schematic (ADRs 0058, 0062, 0071) also
+  draws data wires from imported fields and runs, use wires, operator wires and every
+  reference as a drawable link. "Single-file export for sharing" is ADR 0061's archive;
+  highlighting a resource's users is `schematic.uses`. Read ADR 0071 decision 8 for the
+  schematic's edges now.

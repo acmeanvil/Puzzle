@@ -4,7 +4,7 @@ section: guide
 order: 100
 keys: kind:study, section:studies, tree:step, kind:preset, section:solver presets, kind:transfer, section:transfers, panel:jobs
 summary: Say what to solve and with which solver, tune how it solves, chain studies, run them here or on another machine, and follow their progress.
-adrs: 0011, 0018, 0021, 0023, 0054, 0067, 0090
+adrs: 0011, 0018, 0021, 0023, 0051, 0053, 0054, 0067, 0068, 0073, 0090
 ---
 
 A study is one analysis of one component: its steps (static, modal, transient...), the
@@ -37,9 +37,26 @@ contact each solver takes. In short:
 - **Code_Saturne** and **OpenFOAM**: incompressible flow. **PyNite**: frames.
   **OpenCourant**: explicit dynamics (impacts, drops).
 
-A **shoot-out** runs the same study on further solvers on one mesh and compares them by
-the study's metrics. List the extra solvers in the study's Properties. The study's own
-solver stays the one whose results transfers read.
+<!-- key: form:solver_shootout -->
+## How to compare solvers: the shoot-out
+
+A **shoot-out** solves one study on its own solver and on others, all on one mesh, and
+compares their results.
+
+1. Model → Run → Run shoot-out… (or right-click the study, Run shoot-out…).
+2. Choose the solver to compare with, and a second if you like. Only solvers whose
+   capabilities take the study's physics and steps are offered.
+3. Puzzle solves each in turn. Each run is stored and listed under the study as any run
+   is, and reused when nothing changed.
+4. The Solver shoot-out tab in the messages shows each comparison: the difference, the
+   tolerance and whether they agree.
+
+What is compared: the study's own shoot-out metrics when it has some (a quantity, a
+norm and a tolerance each, in Properties under the study's shoot-out), else each
+physics' first result node by node within 1 % (relative L2: the displacement, the
+temperature, the velocity), or the frequencies for a modal or buckling study. The latest
+report is kept with the results. The study's own solver stays the one whose results
+transfers read.
 
 ## How to run
 
@@ -124,8 +141,29 @@ To solve on another machine over SSH, add it with Project → Remote hosts…, t
 Run → Run on… (or right-click a study). A host may run Slurm or PBS. The result is the
 same as a local one and is reused either way.
 
+On Windows the job runner is not used yet, for remote hosts too: a remote run is
+followed while Puzzle is open, and comes home when it ends.
+
 Settings > Solvers > Cores per run (automatic: 4, or one fewer than the physical cores
-on smaller machines) and Parallel processes per run set what a solve may use.
+on smaller machines) and Parallel processes per run set what a solve may use; the
+processes share those cores. Code_Aster takes both, as threads and MPI processes.
+
+## Solvers on this computer
+
+Settings > Solvers lists each solver and how a solve runs it here: natively from its
+environment, in its container image, or missing. From the same page:
+
+- **Build CalculiX with PARDISO now**: Intel MKL's PARDISO solver factors two to four
+  times faster than SPOOLES, with the same answers. Its licence forbids shipping it
+  built in, so Puzzle compiles CalculiX on your computer, in the background, from the
+  environment the installer carries; it is used from then on.
+- **Repair a solver environment…**: puts a solver's environment back as installed, the
+  old folder restored if that fails.
+- **Turn on WSL…** (Windows): solvers with no Windows build run in a Linux distribution
+  of Puzzle's own, made from the solver's image.
+
+`puzzle solvers` prints the same list in a terminal, `puzzle solvers --build` builds
+CalculiX with PARDISO.
 
 ## Mistakes to avoid
 
@@ -164,13 +202,16 @@ settings with [solver_settings](help:mcp:solver_settings) and
 [solver_settings_set](help:mcp:solver_settings_set). Jobs:
 [jobs_list](help:mcp:jobs_list), [job_resume](help:mcp:job_resume),
 [job_cancel](help:mcp:job_cancel); hosts: [hosts_list](help:mcp:hosts_list),
-[host_check](help:mcp:host_check). In a terminal: `puzzle run`
+[host_check](help:mcp:host_check); a shoot-out:
+[solver_shootout](help:mcp:solver_shootout). In a terminal: `puzzle run` (with
+`--shootout SOLVER` for a shoot-out)
 ([cli:run](help:cli:run)), `puzzle progress`, `puzzle log`, `puzzle jobs`,
 `puzzle hosts`.
 
 ## See also
 
 - [Analyses](help:guides/analyses)
+- [Flow and convection](help:guides/fluid-flow)
 - [Results](help:guides/results)
 - [Optimisation and convergence](help:guides/optimisation-and-convergence)
 - [Problem codes](help:reference/problems)

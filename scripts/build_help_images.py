@@ -113,13 +113,30 @@ def draw_menus(window, pictures) -> list[str]:
     index = {}
     for name in sorted(named):
         file = pictures.menu_file(name)
-        menu_picture(window, paths[name]).save(str(pictures.path(file)))
+        menu_picture(window, _chain(window, name)).save(str(pictures.path(file)))
         index[name] = file
     pictures.INDEX.write_text(json.dumps({"menus": index}, indent=1, ensure_ascii=False)
                               + "\n", encoding="utf-8", newline="\n")  # fmt: skip
     pictures.index.cache_clear()
     print(f"{len(index)} menu pictures")
     return bad
+
+
+def _chain(window, name: str) -> list:
+    """(menu, action) from the bar down to a menu path, found by words as each menu is
+    filled: a dynamic menu (loads by physics, operators) refills itself when shown, so
+    actions found earlier may be gone."""
+    from puzzle.help.pictures import ARROW
+
+    words = name.split(ARROW)
+    top = next(a for a in window.menuBar().actions() if _plain(a.text()) == words[0])
+    chain, menu = [(None, top)], top.menu()
+    for word in words[1:]:
+        menu.aboutToShow.emit()
+        action = next(a for a in menu.actions() if _plain(a.text()) == word)
+        chain.append((menu, action))
+        menu = action.menu()
+    return chain
 
 
 def menu_picture(window, chain):
@@ -140,7 +157,8 @@ def menu_picture(window, chain):
     if last.menu() is not None and len(chain) > 1:
         menus.append((last.menu(), None))
     for menu, action in menus:
-        menu.aboutToShow.emit()
+        if action is None:  # a submenu named last: filled now, as when it opens
+            menu.aboutToShow.emit()
         menu.adjustSize()
         menu.setActiveAction(action) if action is not None else None
         shot = menu.grab()

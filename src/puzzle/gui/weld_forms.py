@@ -483,3 +483,74 @@ def weld_fatigue(window, study_id: str | None = None, weld: str | None = None,
     add_ask_button(dialog, window, prompt)
     window.run_dialog(dialog)
     return view.result
+
+
+# --- Model the bead / Back to a light weld (ADR 0078 step 4; ADR 0090 package 16) ------
+
+
+def model_bead(window, comp, name: str):
+    """A light weld drawn as a modelled bead, as MCP `weld_make_modelled` does: the
+    component meshed in the background (the bead's legs come from the light weld's
+    node pairs on it), then `weld_generator.modelled_commands` as one batch (one undo)."""
+    import tempfile
+    from pathlib import Path
+
+    from puzzle import weld_generator
+    from puzzle.mesh.generate import generate_mesh
+
+    s = window.session
+    project, root, cid = s.project, s.root, comp.id
+
+    def work(_emit):
+        with tempfile.TemporaryDirectory() as scratch:
+            meshed = generate_mesh(project, cid, root, Path(scratch))
+            return weld_generator.modelled_commands(project, project.objects[cid],
+                                                    meshed.mesh, name)  # fmt: skip
+
+    def done(batch) -> None:
+        if window.session is s and batch:
+            window.submit_batch(batch)
+
+    return window.background(f"Drawing the bead of {name}…", work, done)
+
+
+def light_weld(window, comp, name: str):
+    """A modelled weld back to a light weld, as MCP `weld_make_line`: its bead's part,
+    geometry, material, ties and mesh size removed, one batch."""
+    from puzzle import weld_generator
+    from puzzle.errors import PuzzleError
+
+    try:
+        batch = weld_generator.line_commands(window.session.project, comp, name)
+    except PuzzleError as exc:
+        window.report(exc)
+        return None
+    return window.submit_batch(batch)
+
+
+def weld_bead(window, comp=None):
+    """Model → Bolts and fasteners → Model or unmodel a weld's bead…: which weld, and
+    whether to draw its bead or go back to a light weld, in one form."""
+    from puzzle.gui.main_menu import current_component
+
+    comp = comp or current_component(window)
+    if comp is None or not comp.welds:
+        window.statusBar().showMessage("No welds yet: Model → Bolts and fasteners → Add weld…",
+                                       8000)  # fmt: skip
+        return None
+    welds = [(w.name, w.name) for w in comp.welds]
+    state = {w.name: w.formulation for w in comp.welds}
+    got = window.ask_form("Weld bead", [
+        Ask("weld", "Weld", choices=welds),
+        Ask("how", "Make it", choices=lambda v: (
+            [("A light weld again (springs across the joint)", "line")]
+            if state.get(v.get("weld")) == "modelled"
+            else [("A modelled bead (a solid tied to both parts)", "modelled")])),
+    ], intro="A modelled bead is a part of its own, meshed with elements a sixth of the leg; "
+       "its line forces then come from the section through its throat. A light weld is "
+       "springs across the joint with no bead meshed.")  # fmt: skip
+    if not got:
+        return None
+    if got["how"] == "modelled":
+        return model_bead(window, comp, got["weld"])
+    return light_weld(window, comp, got["weld"])

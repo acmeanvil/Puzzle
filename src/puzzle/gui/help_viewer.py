@@ -9,7 +9,7 @@ the tab or panel it sits in (`panel:<key>`), else the getting-started page.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QObject, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QKeySequence, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
@@ -39,7 +39,7 @@ def rendered(markdown: str) -> tuple[str, dict[str, object]]:
     from puzzle.gui.theme import current as tokens
     from puzzle.help import pictures
 
-    markdown = pictures.with_pictures(markdown)
+    markdown = pictures.with_pictures(markdown, links=True)
     colour, images, parts = tokens().text, {}, []
     for name in pictures.references(markdown):
         image = QImage(str(pictures.path(name)))
@@ -204,11 +204,29 @@ class HelpWindow(QDialog):
             if not self.show_key(page):
                 self.show_page(page, heading or None)
         elif scheme == "puzzle":
-            action = getattr(self.window_, "actions_by_name", {}).get(url.path() or url.host())
-            if action is not None and action.isEnabled():
-                action.trigger()
+            open_tool(self.window_, url.toString()[len("puzzle:") :])
         else:
             QDesktopServices.openUrl(url)
+
+
+def open_tool(window, target: str) -> bool:
+    """A `puzzle:` link's tool (ADR 0083 decision 2; ADR-E-1): `menu/<slug>` or a menu
+    path runs that menu item (a menu opens where the pointer is), a toolbar name its
+    action. False when nothing answers or it is greyed out."""
+    from PySide6.QtGui import QCursor
+
+    from puzzle.gui import main_menu
+
+    if window is None:
+        return False
+    action = main_menu.action_for(window, target)
+    if action is None or not action.isEnabled():
+        return False
+    if action.menu() is not None:
+        action.menu().popup(QCursor.pos())
+    else:
+        action.trigger()
+    return True
 
 
 # --- F1 ---------------------------------------------------------------------------------
@@ -221,6 +239,11 @@ def help_key(window, widget: QWidget | None = None) -> str:
 
     w = widget if widget is not None else QApplication.focusWidget()
     while w is not None:
+        scene = getattr(w, "scene", None)  # the schematic: its selected node first (ADR-E-2)
+        if callable(getattr(scene, "selectedItems", None)) and hasattr(w, "schematic"):
+            key = _schematic_key(window, scene)
+            if key:
+                return key
         explicit = w.property("help")
         if isinstance(explicit, str) and explicit:
             return explicit
@@ -238,6 +261,23 @@ def help_key(window, widget: QWidget | None = None) -> str:
                 return f"panel:{panel}"
         w = w.parentWidget()
     return f"page:{START}"
+
+
+def _schematic_key(window, scene) -> str:
+    """The one node selected on the schematic's canvas: an operator's entry
+    (`operator:<type>`), a load's (`feature:<type>`) or its object kind's."""
+    try:
+        nodes = [i.node for i in scene.selectedItems() if hasattr(i, "node")]
+    except RuntimeError:  # the scene went
+        return ""
+    if len(nodes) != 1:
+        return ""
+    node = nodes[0]
+    if node.path:  # a feature in its component (ADR 0071 decision 8)
+        target = _walk(window, node.object, node.path)
+        if target is not None and getattr(target, "type", None):
+            return f"feature:{target.type}"
+    return _object_key(window, node.object)
 
 
 def _properties_key(window, panel) -> str:
@@ -320,3 +360,44 @@ def install(window) -> None:
     shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
     shortcut.activated.connect(lambda: show_help(window, help_key(window)))
     window._help_shortcut = shortcut
+    window._menu_help = _MenuHelp(window)  # F1 on an open menu's item (ADR-E-2)
+    QApplication.instance().installEventFilter(window._menu_help)
+
+
+def show_menu_help(window, menu_path: str) -> HelpWindow:
+    """The page that explains a menu item: the guide naming it, at its heading."""
+    from puzzle import help as manual
+
+    found = manual.menu_place(menu_path)
+    viewer = show_help(window)
+    if found is None:
+        viewer.search(menu_path.rsplit(" → ", 1)[-1].rstrip("…"))
+    else:
+        viewer.show_page(found[0].name, found[1])
+    return viewer
+
+
+class _MenuHelp(QObject):
+    """F1 while a menu bar menu is open: Qt gives the key to the menu, so no shortcut
+    fires. The highlighted item's menu path finds its page (`help.menu_place`)."""
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        self.window_ = window
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt's name
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QMenu
+
+        if (event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_F1
+                and isinstance(obj, QMenu) and obj.activeAction() is not None):  # fmt: skip
+            from puzzle.gui import main_menu
+
+            path = main_menu.path_of(self.window_, obj.activeAction(), obj)
+            if path is not None:
+                for menu in QApplication.topLevelWidgets():
+                    if isinstance(menu, QMenu) and menu.isVisible():
+                        menu.close()
+                show_menu_help(self.window_, path)
+                return True
+        return False

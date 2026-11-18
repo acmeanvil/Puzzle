@@ -275,7 +275,9 @@ def _yaml(value, indent: int = 0) -> str:
     if isinstance(value, list):
         if not value:
             return "[]"
-        return "\n".join(f"{pad}- {_yaml(v)}" for v in value)
+        # a mapping in a list (extra_files' {source: destination}) in JSON's flow style
+        return "\n".join(f"{pad}- {json.dumps(v) if isinstance(v, dict) else _yaml(v)}"
+                         for v in value)  # fmt: skip
     if isinstance(value, bool):
         return "true" if value else "false"
     return json.dumps(value)
@@ -295,7 +297,8 @@ def signing(platform: str, environ: dict[str, str] | None = None) -> dict[str, s
 
 
 def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
-          environ: dict[str, str] | None = None) -> Path:  # fmt: skip
+          environ: dict[str, str] | None = None,
+          licences: Path | None = None) -> Path:  # fmt: skip
     """Write the installer's construct.yaml and explicit lists; returns its folder."""
     base, pypi = lock.packages(BASE, platform)
     if not base:
@@ -348,6 +351,8 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
         # The systems the lock was solved for are the oldest its packages accept.
         "virtual_specs": [_at_least(v) for v in lock.virtual_for(platform) if _bounded(v)],
     }
+    if licences is not None:  # ADR 0068 decision 9: <prefix>/licenses, Help → Licences
+        info["extra_files"] = _licence_files(Path(licences), folder)
     if platform.startswith("win"):
         info["default_prefix"] = "%LOCALAPPDATA%\\Puzzle"  # per user, no administrator
     info.update(signing(platform, environ))
@@ -358,6 +363,21 @@ def write(lock: Lock, platform: str, sources: list[str], out: Path, kind: str,
         encoding="utf-8",
     )
     return folder
+
+
+def _licence_files(source: Path, folder: Path) -> list[dict[str, str]]:
+    """The licences folder (`scripts/collect_licences.py`) copied beside construct.yaml,
+    as constructor's extra_files: each file to `licenses/<its path>` in the prefix."""
+    import shutil
+
+    if not (source / "index.json").is_file():
+        raise SystemExit(f"{source} is no licences folder: run scripts/collect_licences.py")
+    dest = folder / "licenses"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(source, dest)
+    return [{f.relative_to(folder).as_posix(): f.relative_to(folder).as_posix()}
+            for f in sorted(dest.rglob("*")) if f.is_file()]  # fmt: skip
 
 
 def _pypi_name(url: str) -> str:
@@ -396,13 +416,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--type", choices=("sh", "pkg", "exe"), help="default: pkg, exe or sh")
     p.add_argument("--out", type=Path, default=ROOT / "packaging" / "installer")
     p.add_argument("--build", action="store_true", help="run constructor too")
+    p.add_argument("--licences", type=Path, help="the licences folder to ship as "
+                   "<prefix>/licenses (scripts/collect_licences.py writes it)")  # fmt: skip
     args = p.parse_args(argv)
     kind = args.type or TYPES[args.platform.split("-")[0]]
     sources = [str(args.packages)] if args.packages else []
     sources.append(args.channel.rstrip("/"))
     steps = 2 if args.build else 1
     print(f"[progress] 1/{steps} writing construct.yaml for {args.platform}", flush=True)
-    folder = write(read_lock(), args.platform, sources, args.out, kind)
+    folder = write(read_lock(), args.platform, sources, args.out, kind,
+                   licences=args.licences)  # fmt: skip
     print(f"wrote {folder / 'construct.yaml'}")
     if args.build:
         print(f"[progress] 2/{steps} building the {kind} installer", flush=True)

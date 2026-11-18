@@ -102,6 +102,114 @@ def run_shootout(
     return out
 
 
+# What a shoot-out compares when its study names no metrics: each physics' first output,
+# node by node (the solvers share one mesh), within 1 %; modal steps their frequencies.
+DEFAULT_TOLERANCE = 0.01
+REPORTS = "shootout"  # results/shootout/<study id>.json: the latest report, kept
+
+
+def default_metrics(project: Project, study: Study) -> list[ComparisonMetric]:
+    from puzzle.model.catalog import OUTPUTS
+    from puzzle.model.schema import Component
+
+    comp = project.objects.get(study.component)
+    out: list[ComparisonMetric] = []
+    if any(s.type in ("modal", "buckling") for s in study.solve_steps()):
+        out.append(ComparisonMetric(quantity="eigenfrequencies", norm="relative_value",
+                                    tolerance=DEFAULT_TOLERANCE))  # fmt: skip
+        return out
+    physics = [p.type for p in comp.physics if any(s.solves(p.type) for s in
+               study.solve_steps())] if isinstance(comp, Component) else []  # fmt: skip
+    for p in physics:
+        if OUTPUTS.get(p):
+            out.append(ComparisonMetric(quantity=OUTPUTS[p][0], norm="relative_l2",
+                                        tolerance=DEFAULT_TOLERANCE))  # fmt: skip
+    return out
+
+
+def shootout_report(
+    project: Project,
+    study_id,
+    root: Path,
+    workdir: Path,
+    solvers: list[str] | None = None,
+    *,
+    store: ResultStore | None = None,
+    on_output: Callable[[str], None] | None = None,
+    timeout_s: float | None = None,
+) -> dict:
+    """The study's solver shoot-out (ADR 0011) as plain data: the GUI's Run shoot-out…,
+    MCP `solver_shootout` and `puzzle run --shootout` all call this through the
+    session's `run_shootout` command. `solvers` (the others to run beside the study's
+    own) replace the study's `shootout.solvers` for this run; with no metrics on the
+    study, `default_metrics`. Each run is stored and reused as any run is; the report
+    is kept as `results/shootout/<study id>.json`."""
+    import copy
+    import json
+    from datetime import UTC, datetime
+
+    from puzzle.labels import solver_label
+    from puzzle.model.schema import Shootout
+
+    study = project.get(study_id, Study)
+    chosen = solvers if solvers else (study.shootout.solvers if study.shootout else [])
+    chosen = [s for s in dict.fromkeys(chosen) if s != study.solver]
+    if not chosen:
+        raise StudyError("a shoot-out needs a solver beside the study's own: name one",
+                         code="invalid", path=study.name)  # fmt: skip
+    metrics = (study.shootout.metrics if study.shootout else []) or default_metrics(project, study)
+    if not metrics:
+        raise StudyError("nothing to compare: give the shoot-out a metric", code="invalid",
+                         path=study.name)  # fmt: skip
+    work = copy.deepcopy(project)
+    work.get(study.id, Study).shootout = Shootout(solvers=chosen, metrics=metrics)
+    out = run_shootout(work, study.id, root, workdir, store=store, on_output=on_output,
+                       timeout_s=timeout_s)  # fmt: skip
+    report = {
+        "study": study.name,
+        "primary": study.solver,
+        "passed": out.passed,
+        "runs": {
+            s: {"solver": solver_label(s), "run_id": r.run_id, "cached": r.cached}
+            for s, r in out.runs.items()
+        },  # fmt: skip
+        "comparisons": [
+            {
+                "solver": c.solver,
+                "quantity": c.metric.quantity,
+                "norm": c.metric.norm,
+                "value": c.value,
+                "tolerance": c.metric.tolerance,
+                "passed": c.passed,
+            }
+            for c in out.comparisons
+        ],  # fmt: skip
+        "settings": out.settings,
+        "table": out.table(),
+        "made": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    if store is not None:
+        from puzzle.project import atomic
+
+        path = Path(store.root) / REPORTS / f"{study.id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(path, json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
+
+def kept_report(root: Path, study_id) -> dict | None:
+    """The latest shoot-out report kept for a study, or None."""
+    import json
+
+    from puzzle.project.layout import RESULTS_DIR
+
+    path = Path(root) / RESULTS_DIR / REPORTS / f"{study_id}.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def settings_in_use(study: Study, solver: str) -> list[str]:
     """What a solver was told beyond its defaults (ADR 0023), as "key = value"."""
     from puzzle.adapters.settings import SHARED_KEYS

@@ -4,7 +4,7 @@ section: guide
 order: 110
 keys: tree:run, kind:result, kind:probe, kind:cut, panel:results, panel:sections
 summary: Look at a solved study, read numbers from it, combine load cases, estimate fatigue life and export results to other software.
-adrs: 0025, 0026, 0032, 0038, 0043
+adrs: 0025, 0026, 0032, 0038, 0043, 0070
 ---
 
 Every solve is stored as a run under its study in the model tree. Select a run, or one
