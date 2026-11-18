@@ -30,6 +30,12 @@ build:
       - if: unix
         then: export CXXFLAGS="$CXXFLAGS -include iterator"
         else: set "CXXFLAGS=%CXXFLAGS% /FIiterator"
+      # as py-slvs: conda-forge's gcc activation (16.2.0 build 3) names ar and the rest in
+      # CMAKE_ARGS without a folder, and CMake runs them as given
+      - if: linux
+        then: >-
+          export CMAKE_ARGS="$(echo "$CMAKE_ARGS" |
+          sed -E "s#=([a-z0-9_]+-conda-linux-gnu-[a-z+-]+)#=$BUILD_PREFIX/bin/\1#g")"
       - ${{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation -Ccmake.define.MANIFOLD_USE_BUILTIN_CLIPPER2=ON -Ccmake.define.MANIFOLD_USE_BUILTIN_TBB=OFF -Ccmake.define.MANIFOLD_USE_BUILTIN_NANOBIND=OFF
 
 requirements:
