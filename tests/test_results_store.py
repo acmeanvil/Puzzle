@@ -117,10 +117,12 @@ def test_runs_and_cache_lookup(tmp_path):
     assert store.get_run(first).duration_s == 2.5
 
 
-def test_fields_are_partitioned_by_run_and_field(tmp_path):
+def test_fields_are_partitioned_by_run_alone(tmp_path):
+    """Format 3: a run's fields are one file in its run's folder (`fields3`)."""
     store = ResultStore(tmp_path)
     run_id = _write(store)
-    assert (tmp_path / "fields" / f"run_id={run_id}" / "field=displacement").is_dir()
+    files = list((tmp_path / "fields3" / f"run_id={run_id}").glob("*.parquet"))
+    assert len(files) == 1 and not (tmp_path / "fields").exists()
 
 
 def test_compaction_keeps_the_data(tmp_path):
@@ -206,7 +208,7 @@ def _transient(store, ids_by_step):
 def test_ids_are_stored_once_per_field(tmp_path):
     store = ResultStore(tmp_path)
     run = _transient(store, [[1, 2, 3, 4]] * 3 + [[2, 4]] + [[2, 4]])
-    table = DeltaTable(str(tmp_path / "fields")).to_pyarrow_table().sort_by("ordinal")
+    table = DeltaTable(str(tmp_path / "fields3")).to_pyarrow_table().sort_by("ordinal")
     assert table.column("ids_from").to_pylist() == [0, 0, 0, 3, 3]
     assert [v is not None for v in table.column("ids").to_pylist()] == [1, 0, 0, 1, 0]
 
@@ -234,7 +236,7 @@ def test_a_new_store_records_its_format(tmp_path):
     import json
 
     _transient(ResultStore(tmp_path / "r"), [[1, 2]])
-    assert json.loads((tmp_path / "r" / "store.json").read_text(encoding="utf-8")) == {"format": 2}
+    assert json.loads((tmp_path / "r" / "store.json").read_text(encoding="utf-8")) == {"format": 3}
 
 
 def test_the_store_compacts_itself_as_runs_accumulate(tmp_path):

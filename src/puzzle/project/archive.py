@@ -396,13 +396,14 @@ def _settle(path: Path, dest: Path, name: str | None) -> Opened:
     if (dest / RESULTS_DIR).exists():
         from puzzle.results.store import ResultStore
 
-        try:
+        try:  # a format 2 store is migrated here, the archive's copy only
             ResultStore(dest / RESULTS_DIR).runs()
         except PuzzleError as exc:
-            if exc.code != "stale_store":
+            if exc.code not in ("stale_store", "store_too_new"):
                 raise
             shutil.rmtree(dest / RESULTS_DIR)
-            notes.append("its results were in an older store format and were left out "
+            age = "a newer" if exc.code == "store_too_new" else "an older"
+            notes.append(f"its results were in {age} store format and were left out "
                          "(run the studies again)")  # fmt: skip
     from puzzle import trust
 

@@ -831,6 +831,7 @@ class MainWindow(QMainWindow):
             self._offer_to_stop_solves()
         self._leave_project()
         self.session = session
+        self._upgrade_store()  # first: anything below may read the store
         self.meshes.clear()
         self.mesh_keys.clear()
         self.contacts.initial.found.clear()
@@ -947,9 +948,12 @@ class MainWindow(QMainWindow):
             runs = self._store().runs()
         except PuzzleError as exc:  # an old results store: the model still opens
             runs = []
-            if getattr(self, "_reported_store", None) != str(s.root):
+            if exc.code == "store_upgrading":  # shown as progress meanwhile
+                pass
+            elif getattr(self, "_reported_store", None) != str(s.root):
                 self._reported_store = str(s.root)
-                if exc.code == "stale_store" and self._offer_new_store():
+                if exc.code in ("stale_store", "store_too_new") and self._offer_new_store(
+                        newer=exc.code == "store_too_new"):  # fmt: skip
                     return self.refresh()
                 self.report(exc)
         from puzzle.project.status import status
@@ -1083,26 +1087,67 @@ class MainWindow(QMainWindow):
         ]
         return self.submit(Edit(object=str(current.id), ops=ops)) if ops else None
 
-    def _offer_new_store(self) -> bool:
-        """An older Puzzle's results can't be read: offer to move them aside (kept, not
-        deleted) and start a new store. Results are a cache of the studies, which can
-        be run again."""
+    def _offer_new_store(self, newer: bool = False) -> bool:
+        """Results this Puzzle can't read (an older Puzzle's that can't be updated, or a
+        newer one's): offer to move them aside (kept, not deleted) and start a new
+        store. Results are a cache of the studies, which can be run again."""
         old = self.session.root / RESULTS_DIR
+        age = "newer" if newer else "older"
         if not self.ask_yes(
-            "Results from an older Puzzle",
-            "This project's results were saved by an older version of Puzzle and can't be "
-            "read.\n\nMove them aside (into a folder next to it, nothing is deleted) and "
-            "start with no results? You can run the studies again to get them back.",
+            f"Results from {'a newer' if newer else 'an older'} Puzzle",
+            f"This project's results were saved by {'a newer' if newer else 'an older'} "
+            "version of Puzzle and can't be read here.\n\nMove them aside (into a folder "
+            "next to it, nothing is deleted) and start with no results? You can run the "
+            "studies again to get them back"
+            + (", or open the project in the newer Puzzle to see them." if newer else "."),
         ):
             return False
         n = 1
-        while (aside := old.with_name(f"{old.name}-older-puzzle-{n}")).exists():
+        while (aside := old.with_name(f"{old.name}-{age}-puzzle-{n}")).exists():
             n += 1
         old.rename(aside)
         self.log.appendPlainText(f"Old results moved to {aside.name}; run the studies again.")
         self.statusBar().showMessage("Started a new results store", 8000)
         self._reported_store = None
         return True
+
+    def _upgrade_store(self) -> None:
+        """A results store an older Puzzle wrote in a format this one migrates (ADR 0090
+        package 14: format 2 to 3) is updated on a worker as the project opens, with
+        progress in the status bar, never on the GUI thread: meanwhile the model opens,
+        its results show as soon as it is done, and Mesh and Run wait."""
+        from puzzle.results import store as results_store
+
+        root = self.session.root / RESULTS_DIR
+        if not results_store.needs_upgrade(root):
+            return
+        results_store.hold_upgrade(root)  # other readers here are told, never kept waiting
+        seen = {"done": 0, "total": 0}
+        opened = self.session.root
+
+        def work(emit):
+            emit("Updating the results store to the current format (once; nothing is lost)…")
+            try:  # released here, so a window closed meanwhile never leaves it held
+                ResultStore(root).upgrade(progress=lambda d, t: seen.update(done=d, total=t))
+            except Exception as exc:
+                why = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+                results_store.release_upgrade(root, failed=why)
+                raise
+            results_store.release_upgrade(root)
+
+        def finished(_):
+            self.toasts.show("Results updated to the current store format")
+            if self.session is not None and self.session.root == opened:
+                self.refresh()
+
+        def failed(exc):
+            if self.session is not None and self.session.root == opened:
+                self._reported_store = None
+                self.refresh()  # offers to move the store aside, as an unreadable one
+
+        self.background("Updating the results store…", work, finished, failed=failed,
+                        fraction=lambda: seen["done"] / seen["total"] if seen["total"]
+                        else None)  # fmt: skip
 
     def _field_catalogs(self, runs) -> dict:
         """Each run's stored fields (metadata only), for the tree's result listing; runs

@@ -158,6 +158,40 @@ def test_a_stale_results_store_is_dropped_with_a_note(project, tmp_path):
     assert any("older store format" in n for n in opened.notes)
 
 
+@pytest.mark.parametrize("results", ["all", "latest"])
+def test_an_archive_of_a_format_2_store_opens_migrated(project, tmp_path, results):
+    """ADR 0090 package 14: a format 2 store travels as it is ("all") or migrated in the
+    staged copy ("latest" opens it to prune), and opens as format 3 either way; the
+    sender's own store is never touched."""
+    import store_format2
+    import test_store_migration as tm
+
+    from puzzle.results import ResultStore
+
+    _, written = tm._store(project / "results", runs=2)
+    store_format2.downgrade(project / "results")
+    out = archive.write(project, tmp_path / "a.puzzle", Include(results=results))
+    assert json.loads((project / "results" / "store.json").read_text(encoding="utf-8")) == {
+        "format": 2}  # fmt: skip
+    opened = archive.read(out.path, tmp_path / "there")
+    store_json = opened.root / "results" / "store.json"
+    assert json.loads(store_json.read_text(encoding="utf-8")) == {"format": 3}
+    assert not any("store format" in n for n in opened.notes)
+    kept = list(written) if results == "all" else list(written)[-1:]  # one study: its latest
+    tm._reads_as_written(ResultStore(opened.root / "results"), {k: written[k] for k in kept})
+
+
+def test_a_newer_results_store_is_dropped_with_a_note(project, tmp_path):
+    import test_store_migration as tm
+
+    tm._store(project / "results", runs=1)
+    (project / "results" / "store.json").write_text('{"format": 4}', encoding="utf-8")
+    opened = archive.read(archive.write(project, tmp_path / "n.puzzle",
+                                        Include(results="all")).path, tmp_path / "t")  # fmt: skip
+    assert not (opened.root / "results").exists()
+    assert any("newer store format" in n for n in opened.notes)
+
+
 def test_sizes_by_part(project):
     s = archive.sizes(project)
     assert s["model"] > 0 and set(s) == {"model", "results", "versions", "history"}

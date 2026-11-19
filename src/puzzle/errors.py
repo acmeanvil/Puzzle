@@ -96,7 +96,9 @@ CODES = {
     "no_material": "a part has no material assigned",
     "missing_input": "an operator's input is not chosen or wired yet",
     # Results
-    "stale_store": "the results store has an older format; delete it to rebuild",
+    "stale_store": "the results store has a format too old to update; delete it to rebuild",
+    "store_too_new": "the results store was written by a newer Puzzle; this one can't read it",
+    "store_upgrading": "the results store is being updated to the current format",
     "export_failed": "a file could not be written",
 }
 

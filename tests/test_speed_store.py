@@ -12,7 +12,8 @@ growth from one to the other under a quarter of the values added (0.08 measured;
 old writer's grew by seven times them).
 
 BE-12: look-ups and reads open only what they need: the runs table once per version
-of it, a field's read only its run's files.
+of it, a field's read only its run's file (format 3: one per run), its footer once,
+then the one row group holding the step.
 """
 
 from __future__ import annotations
@@ -25,9 +26,7 @@ import time
 from datetime import UTC, datetime
 
 import numpy as np
-import pyarrow as pa
 import pytest
-from deltalake import DeltaTable, write_deltalake
 
 from puzzle.mesh.mesh import CellBlock, Mesh
 from puzzle.results import Field, Results, ResultStore, StepResult
@@ -161,29 +160,6 @@ def test_a_run_reads_back_as_stored_and_compacts_and_deletes(tmp_path):
     assert [r.run_id for r in store.runs()] == [rid]
 
 
-def test_a_store_delta_rs_wrote_takes_new_runs(tmp_path):
-    """Stores written before (by delta-rs's own writer) read and take runs as ever."""
-    store = ResultStore(tmp_path / "results")
-    old = _run(seed=2)
-    rows = list(store_module._fields_rows("old", old))
-    schema = store_module.SCHEMAS["fields"]
-    plain = [k for k in schema.names if k not in ("ids", "values")]
-    table = pa.table({**{k: pa.array([m[k] for m, _, _ in rows], schema.field(k).type)
-                         for k in plain},
-                      "ids": store_module._lists([i for _, i, _ in rows], pa.int64()),
-                      "values": store_module._lists([v for _, _, v in rows], pa.float64())},
-                     schema=schema)  # fmt: skip
-    store._check_format(create=True)
-    write_deltalake(str(tmp_path / "results" / "fields"), table, mode="append",
-                    partition_by=store_module.PARTITIONS["fields"],
-                    writer_properties=store_module.FIELD_WRITER)  # fmt: skip
-    new = _run(seed=3)
-    rid = _write(store, new)
-    _same(store.read_results(rid), new)
-    assert {r["run_id"] for r in DeltaTable(str(tmp_path / "results" / "fields"))
-            .to_pyarrow_table(columns=["run_id"]).to_pylist()} == {"old", rid}  # fmt: skip
-
-
 def test_a_field_named_with_any_characters(tmp_path):
     store = ResultStore(tmp_path / "results")
     written = _run(names=("displacement", "stress", "a field/with spaces?"))
@@ -215,8 +191,34 @@ def test_look_ups_and_reads_open_only_what_they_need(tmp_path, monkeypatch):
     assert looked < 0.005, f"a look-up took {looked * 1000:.1f} ms"
     store.read_field(ids[5], "displacement", 1)
     assert opened == []  # nothing written since: no table opened again
-    dataset = store._dataset("fields", [("run_id", "=", ids[5]), ("field", "=", "stress")])
-    assert len(dataset.files) == 1  # this run's stress file, not every run's
+    assert len(store._run_files(ids[5])) == 1  # format 3: this run's one file, no other's
+
+    # A field's step reads its run's footer once, then one row group: no other field's
+    # or step's arrays (BE-12).
+    import pyarrow.parquet as pq
+
+    groups = []
+    real_group = pq.ParquetFile.read_row_group
+
+    def counting(self, i, columns=None, **k):
+        groups.append((i, tuple(columns or ())))
+        return real_group(self, i, columns=columns, **k)
+
+    monkeypatch.setattr(pq.ParquetFile, "read_row_group", counting)
+    with store_module._cache_lock:
+        store_module._INDEXES.clear()
+    store.read_field(ids[6], "stress", 1)
+    assert groups == [(4, ("values",)), (3, ("ids",))]  # stress after displacement's 3
+    groups.clear()
+    store.read_field(ids[6], "displacement", 2)
+    assert groups == [(2, ("values",)), (0, ("ids",))]  # its ids held by step 0
+    t = time.perf_counter()
+    for _ in range(20):
+        store.read_field(ids[7], "displacement", 1)
+        store.outline(ids[7])
+        store.field_catalog(ids[7])
+    each = (time.perf_counter() - t) / 20  # 2.0 ms here (format 2, 120 runs: 35)
+    assert each < 0.006, f"a field, an outline and a catalog took {each * 1000:.1f} ms"
 
     rid = _write(store, _run(n=20, seed=99), "new")  # a write is seen at once
     assert store.find_run("new").run_id == rid

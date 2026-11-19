@@ -1003,6 +1003,11 @@ skipped (the subagent's run).
   form's real meshing, F1 inside a live open menu, the job runner's fixes on POSIX
   (through `Runner.tick` with a stand-in), the installer with `--licences`.
 
+**After the packages (2026-11-18):** the review and its sixteen packages were pushed to
+`main` (`ffa74a4`) on the maintainer's word, which ends the freeze on new ADRs. Package
+14's BE-12 remainder was then built on the maintainer's go-ahead: results store format 3
+(ADR 0008's amendment), a file per run, a format 2 store migrated in place.
+
 ### Enhancements toward the state of the art
 
 From `state-of-the-art.md` (50 gaps, each with who has it, which open solver can deliver

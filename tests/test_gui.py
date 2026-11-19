@@ -442,6 +442,73 @@ def test_an_old_results_store_can_be_moved_aside(app, tmp_path, monkeypatch):
         w.close()
 
 
+def test_a_format_2_results_store_is_updated_as_the_project_opens(app, tmp_path, monkeypatch):
+    """ADR 0090 package 14: a format 2 store is migrated on a worker as the project
+    opens (status-bar progress, then a toast), never asked about, its runs shown after."""
+    import json
+
+    import store_format2
+    import test_store_migration as tm
+
+    asked = []
+    monkeypatch.setattr(MainWindow, "ask_yes", lambda self, *a: asked.append(a) or False)
+    root = tmp_path / "cantilever"
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    )
+    _, written = tm._store(root / "results", runs=2)
+    store_format2.downgrade(root / "results")
+    w = MainWindow(root)
+    try:
+        while w.tasks:
+            app.processEvents()
+        found = json.loads((root / "results" / "store.json").read_text(encoding="utf-8"))
+        assert found == {"format": 3} and not asked
+        assert "Updating the results store" in w.log.toPlainText()
+        assert "error" not in w.log.toPlainText()  # the reads meanwhile were told, quietly
+        assert [r.run_id for r in w._store().runs()] == list(written)
+        assert [r.run_id for r in w.run_records] == list(written)  # refreshed after
+    finally:
+        while w.tasks:
+            app.processEvents()
+        w.close()
+
+
+def test_a_results_store_that_fails_to_update_is_offered_aside(app, tmp_path, monkeypatch):
+    import store_format2
+    import test_store_migration as tm
+
+    from puzzle.results.store import ResultStore
+
+    asked = []
+    monkeypatch.setattr(MainWindow, "ask_yes", lambda self, *a: asked.append(a) or True)
+
+    def full(self, progress=None):
+        raise OSError("no space left on the disk")
+
+    monkeypatch.setattr(ResultStore, "upgrade", full)
+    root = tmp_path / "cantilever"
+    shutil.copytree(
+        EXAMPLE, root, ignore=shutil.ignore_patterns("results*", ".puzzle", "history.jsonl")
+    )
+    tm._store(root / "results", runs=1)
+    store_format2.downgrade(root / "results")
+    w = MainWindow(root)
+    try:
+        while w.tasks:
+            app.processEvents()
+        assert len(asked) == 1 and "older version of Puzzle" in asked[0][1]
+        assert (root / "results-older-puzzle-1" / "store.json").exists()  # kept
+        assert w._store().runs() == []
+    finally:
+        while w.tasks:
+            app.processEvents()
+        w.close()
+        from puzzle.results import store as sm
+
+        sm.release_upgrade(root / "results")
+
+
 def test_save_as_new_project_opens_an_independent_copy(window, tmp_path):
     before = window.session.root
     name = window.session.project.name

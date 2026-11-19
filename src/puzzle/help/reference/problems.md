@@ -274,12 +274,22 @@ The solver ran but failed.
 <!-- key: problem:stale_store, error:stale_store -->
 ### stale_store
 
-The results store has an older format; delete it to rebuild.
+The results store has a format too old to update; delete it to rebuild.
 
 <!-- key: problem:stopped, error:stopped -->
 ### stopped
 
 The run was stopped before it finished.
+
+<!-- key: problem:store_too_new, error:store_too_new -->
+### store_too_new
+
+The results store was written by a newer Puzzle; this one can't read it.
+
+<!-- key: problem:store_upgrading, error:store_upgrading -->
+### store_upgrading
+
+The results store is being updated to the current format.
 
 <!-- key: problem:suppressed, error:suppressed -->
 ### suppressed
