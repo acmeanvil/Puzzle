@@ -68,11 +68,98 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
 
     Vector fields also get a `<name>_magnitude` array, and stress gets `von_mises`.
     """
+    shown = grid_blocks(mesh)
+    over = (mesh.node_ids, mesh.coords, *(a for b in shown for a in (b.connectivity, b.ids)))
+    # The cells are the same for every result of a mesh, and the fields for every
+    # quantity of a step: both are kept on the mesh (`Mesh.kept`) and handed out as
+    # shallow copies, which share the arrays and take the caller's own. Building them
+    # anew was a third of each click on a result (35 of 115 ms at 200k nodes).
+    bare = mesh.kept("vtk cells", over, lambda: _bare_grid(mesh, shown))
+    if step is None:
+        return _handed(bare)
+
+    def with_fields():
+        grid = _handed(bare)
+        for f in step.fields.values():
+            if not len(f.ids):  # nothing stored there (older runs kept empty fields)
+                continue
+            if f.location == "node":
+                _add(grid, mesh, f)
+            elif f.location == "element":
+                _add_cells(grid, f)
+        return grid
+
+    fields = tuple(step.fields.values())
+    arrays = tuple(a for f in fields for a in (f.ids, f.values))
+    return _handed(mesh.kept("vtk step", (*over, *fields, *arrays), with_fields))
+
+
+def skin(mesh: Mesh, grid, name: str):
+    """The outer surface of `grid` (a result on `mesh`, deformed or not) carrying the
+    array `name`, or None when the grid is not this mesh's own (cut, revolved, shown
+    whole). The surface's faces are found once per mesh and kept; given the volume, the
+    renderer found them anew for every result shown (47 of each click's 115 ms at
+    200k nodes)."""
+    if grid.n_points != len(mesh.node_ids) or grid.n_cells != sum(
+        len(b.ids) for b in grid_blocks(mesh)
+    ):
+        return None
+    shown = grid_blocks(mesh)
+    over = (mesh.node_ids, mesh.coords, *(a for b in shown for a in (b.connectivity, b.ids)))
+
+    def outer():
+        # Each surface point's and face's place in the grid, by the node and element
+        # ids the grid carries (VTK's own "original ids" are not the grid's points on
+        # second-order cells, whose faces it cuts into flat ones).
+        bare = to_grid(mesh)
+        surface = bare.extract_surface(algorithm="dataset_surface")
+        order = np.argsort(mesh.node_ids)
+        ids = np.asarray(surface.point_data["node_id"])
+        points = order[np.searchsorted(mesh.node_ids, ids, sorter=order)]
+        if not np.array_equal(mesh.node_ids[points], ids) or not np.allclose(
+            np.asarray(surface.points), np.asarray(bare.points)[points]
+        ):
+            return None  # points VTK made itself: draw the volume
+        elements = np.asarray(bare.cell_data["element_id"])
+        by_id = np.argsort(elements)
+        mine = np.asarray(surface.cell_data["element_id"])
+        cells = by_id[np.searchsorted(elements, mine, sorter=by_id)]
+        return surface, points, cells
+
+    found = mesh.kept("vtk skin", over, outer)
+    if found is None:
+        return None
+    kept, points, cells = found
+    out = _handed(kept)
+    out.points = np.asarray(grid.points)[points]
+    if name in grid.point_data:
+        out.point_data[name] = np.asarray(grid.point_data[name])[points]
+    elif name in grid.cell_data:
+        out.cell_data[name] = np.asarray(grid.cell_data[name])[cells]
+    else:
+        return None
+    return out
+
+
+def _handed(kept):
+    """A kept grid for a caller: its own grid, point and cell data lists and points
+    object over the same arrays, so arrays it adds and points it sets (pyvista's
+    `grid.points = ...` writes into the points object) never reach the kept one. No
+    caller changes an array in place."""
+    import vtk
+
+    grid = kept.copy(deep=False)
+    points = vtk.vtkPoints()
+    points.SetData(kept.GetPoints().GetData())
+    grid.SetPoints(points)
+    return grid
+
+
+def _bare_grid(mesh: Mesh, shown):
     import pyvista as pv
 
     cells, types = [], []
     order = np.argsort(mesh.node_ids)
-    shown = grid_blocks(mesh)
     for b in shown:
         if b.element not in VTK_CELLS:
             raise ValueError(f"viewing {b.element} elements is not supported yet")
@@ -87,14 +174,6 @@ def to_grid(mesh: Mesh, step: StepResult | None = None):
     grid = pv.UnstructuredGrid(np.concatenate(cells), np.concatenate(types), mesh.coords)
     grid.point_data["node_id"] = mesh.node_ids
     grid.cell_data["element_id"] = np.concatenate([b.ids for b in shown])
-    if step is not None:
-        for f in step.fields.values():
-            if not len(f.ids):  # nothing stored there (older runs kept empty fields)
-                continue
-            if f.location == "node":
-                _add(grid, mesh, f)
-            elif f.location == "element":
-                _add_cells(grid, f)
     return grid
 
 

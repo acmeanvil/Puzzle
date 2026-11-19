@@ -110,7 +110,24 @@ class Mesh:
         """Beams and shells: elements with rotations."""
         return self.beam_blocks() + self.shell_blocks()
 
+    def kept(self, name: str, over: tuple, make):
+        """`make()`, worked out once for the arrays in `over` and kept on this mesh: the
+        same arrays again give the kept value (they are held, so an id is never another
+        array's). The node order, the solids' faces and centres were worked out anew on
+        every call: 4 s of each click on a result with ten bolts, at 200k nodes."""
+        held = self.__dict__.setdefault("_kept", {})
+        hit = held.get(name)
+        if (
+            hit is not None
+            and len(hit[0]) == len(over)
+            and all(a is b for a, b in zip(hit[0], over, strict=True))
+        ):
+            return hit[1]
+        value = make()
+        held[name] = (tuple(over), value)
+        return value
+
     def node_coords(self, ids: np.ndarray) -> np.ndarray:
         """Coordinates of the given node ids."""
-        order = np.argsort(self.node_ids)
+        order = self.kept("node order", (self.node_ids,), lambda: np.argsort(self.node_ids))
         return self.coords[order[np.searchsorted(self.node_ids, ids, sorter=order)]]

@@ -1626,8 +1626,15 @@ class Viewport(QWidget):
                 mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2, -2)
                 self.shown["partial"] = int(defined.sum())
             else:
-                self.plotter.add_mesh(grid, scalars=name, clim=clim, scalar_bar_args=bar,
-                                      **colours)  # fmt: skip
+                from puzzle.post.vtk import skin
+
+                # the model's own outer faces, kept per mesh (a cut, a revolved or a
+                # mirrored view draws its own grid)
+                outer = None if away is not None or revolved or whole else skin(mesh, grid, name)
+                # the legend spans the whole model's values, the inside's too
+                span = clim if outer is None else clim or (self.shown["min"], self.shown["max"])
+                self.plotter.add_mesh(grid if outer is None else outer, scalars=name,
+                                      clim=span, scalar_bar_args=bar, **colours)  # fmt: skip
             self.legend.finish(self.plotter)
             from puzzle.post.view import draw_beams
 

@@ -234,10 +234,16 @@ def colour_levels(tree, depth_of_top: int = 0) -> None:
             if on and item.childCount() and levels:
                 item.setForeground(0, QBrush(QColor(levels[(depth + 1) % len(levels)])))
                 font.setWeight(font.Weight.DemiBold)
-            else:
+                item.setFont(0, font)
+            # a plain item is left alone unless it was a heading: each set is a
+            # dataChanged, and Properties' 350 rows took 0.2 s of every selection
+            elif (
+                font.weight() != font.Weight.Normal
+                or item.data(0, Qt.ItemDataRole.ForegroundRole) is not None
+            ):
                 item.setData(0, Qt.ItemDataRole.ForegroundRole, None)  # the palette's
                 font.setWeight(font.Weight.Normal)
-            item.setFont(0, font)
+                item.setFont(0, font)
             stack.append((item, depth + 1))
 
 

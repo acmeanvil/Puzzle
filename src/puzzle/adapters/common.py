@@ -1413,11 +1413,16 @@ def _parent_centres(group, mesh: Mesh) -> dict[tuple, np.ndarray]:
     solids = [b for b in mesh.blocks if b.dim == 3 and b.element in FACES]
     if not solids or mesh.planar:
         return {}
-    faces = FaceLookup.build(solids)
-    centre_of = {}
-    for b in solids:
-        nodes = mesh.node_coords(b.connectivity.ravel()).reshape(*b.connectivity.shape, 3)
-        centre_of.update(zip(b.ids.tolist(), nodes.mean(axis=1), strict=True))
+
+    def whole():  # the same for every group of this mesh: kept on it (`Mesh.kept`)
+        centres = {}
+        for b in solids:
+            nodes = mesh.node_coords(b.connectivity.ravel()).reshape(*b.connectivity.shape, 3)
+            centres.update(zip(b.ids.tolist(), nodes.mean(axis=1), strict=True))
+        return FaceLookup.build(solids), centres
+
+    over = (mesh.coords, mesh.node_ids, *(a for b in solids for a in (b.connectivity, b.ids)))
+    faces, centre_of = mesh.kept("solid faces", over, whole)
     out = {}
     for b in surface_blocks(group, mesh):
         try:

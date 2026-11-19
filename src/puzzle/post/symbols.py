@@ -213,15 +213,32 @@ def _fastener_symbols(component, mesh: Mesh, project=None, skip=frozenset()) -> 
     project is given, and is drawn with its head and nut (hex prisms on the plates'
     outer faces, as its joint style puts them: none on a tapped thread or the ground).
     Drawing only: a beam bolt's head and nut are no part of its analysis."""
-    from puzzle.adapters.common import fastener_ends
     from puzzle.bolts import resolve
 
+    bolts = [c if project is None else resolve(project, c)
+             for c in getattr(component, "connectors", []) if c.name not in skip]  # fmt: skip
+    if not bolts:
+        return []
+    # Kept on the mesh for these bolts, their types' sizes and the look: every selection
+    # in the tree and every result shown drew them anew (0.12 s for ten bolts at 200k
+    # nodes, 4 s before the mesh kept its faces).
+    types = [project.objects.get(c.type) for c in bolts if project is not None and c.type]
+    key = repr(([c.model_dump(mode="json") for c in bolts],
+                [t.model_dump(mode="json") for t in types if t is not None],
+                sorted(mesh.groups), bolt_colour(), bolt_look()))  # fmt: skip
+    kept = mesh.__dict__.setdefault("_fastener_symbols", {})
+    if key not in kept:
+        if len(kept) > 8:
+            kept.clear()
+        kept[key] = _draw_fasteners(bolts, mesh, project)
+    return list(kept[key])
+
+
+def _draw_fasteners(bolts, mesh: Mesh, project) -> list[Glyphs]:
+    from puzzle.adapters.common import fastener_ends
+
     out = []
-    for c in getattr(component, "connectors", []):
-        if c.name in skip:  # hidden in the view
-            continue
-        if project is not None:
-            c = resolve(project, c)
+    for c in bolts:
         try:
             ends = fastener_ends(c, mesh, c.name)
         except Exception:  # an end not meshed yet, or not a face: nothing to draw

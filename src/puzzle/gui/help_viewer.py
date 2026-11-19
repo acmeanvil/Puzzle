@@ -9,7 +9,7 @@ the tab or panel it sits in (`panel:<key>`), else the getting-started page.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QUrl
+from PySide6.QtCore import QEvent, QObject, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QKeySequence, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
@@ -377,6 +377,9 @@ def show_menu_help(window, menu_path: str) -> HelpWindow:
     return viewer
 
 
+_KEY_PRESS = QEvent.Type.KeyPress
+
+
 class _MenuHelp(QObject):
     """F1 while a menu bar menu is open: Qt gives the key to the menu, so no shortcut
     fires. The highlighted item's menu path finds its page (`help.menu_place`)."""
@@ -386,10 +389,13 @@ class _MenuHelp(QObject):
         self.window_ = window
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt's name
-        from PySide6.QtCore import QEvent
+        # every event of the application passes here (20,000 while Properties filled a
+        # component: 0.14 s in two imports per event), so anything but a key leaves at once
+        if event.type() is not _KEY_PRESS:
+            return False
         from PySide6.QtWidgets import QMenu
 
-        if (event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_F1
+        if (event.key() == Qt.Key.Key_F1
                 and isinstance(obj, QMenu) and obj.activeAction() is not None):  # fmt: skip
             from puzzle.gui import main_menu
 

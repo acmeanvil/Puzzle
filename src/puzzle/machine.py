@@ -30,6 +30,9 @@ def physical_cores() -> int:
         if sys.platform.startswith("linux"):
             return _linux_cores() or logical_cores()
         if os.name == "nt":
+            found = _windows_cores()
+            if found:
+                return found
             out = subprocess.run(
                 ["powershell", "-NoProfile", "-Command",
                  "(Get-CimInstance Win32_Processor | Measure-Object NumberOfCores -Sum).Sum"],
@@ -40,6 +43,32 @@ def physical_cores() -> int:
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return logical_cores()
+
+
+def _windows_cores() -> int | None:
+    """Physical cores from Windows itself (one record per core): PowerShell took 1.2 s,
+    on the GUI's thread as the window opened, where Settings reads this for its choices."""
+    import ctypes
+
+    try:
+        kernel = ctypes.windll.kernel32
+        size = ctypes.c_ulong(0)
+        kernel.GetLogicalProcessorInformationEx(0, None, ctypes.byref(size))  # 0: cores
+        if not size.value:
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if not kernel.GetLogicalProcessorInformationEx(0, buffer, ctypes.byref(size)):
+            return None
+        count, at = 0, 0
+        while at + 8 <= size.value:  # each record: relationship (4 bytes), its size (4)
+            length = int.from_bytes(buffer.raw[at + 4 : at + 8], "little")
+            if length <= 0:
+                break
+            count += 1
+            at += length
+        return count or None
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 DEFAULT_CORES = 4
