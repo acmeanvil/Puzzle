@@ -46,11 +46,15 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.1
         with:
           environments: packaging
-      - run: pixi run -e packaging build-packages --output output --only puzzle-fem
+      # PyNite too (noarch, pure Python, seconds): the channel last published before
+      # its recipe existed, and every installer failed for want of it
+      - run: pixi run -e packaging build-packages --output output --only pynitefea puzzle-fem
       - uses: actions/upload-artifact@v4
         with:
           name: puzzle-fem
-          path: output/noarch/puzzle-fem-*.conda
+          path: |
+            output/noarch/puzzle-fem-*.conda
+            output/noarch/pynitefea-*.conda
           if-no-files-found: error
 
   # The platforms to build: all of them, or the one a manual run asks for.
