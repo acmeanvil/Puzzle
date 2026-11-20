@@ -141,6 +141,26 @@ def test_an_imported_fields_file_is_hashed_by_content(tmp_path):
     assert content_hashes(p)[f.id] != before  # the stored file_hash alone didn't see it
 
 
+def test_a_file_rewritten_within_one_clock_tick_is_read_again(tmp_path):
+    """Same size, same modification time, other content: Windows' CI wrote a file twice
+    within one tick and the cached hash hid the edit."""
+    import os
+
+    from puzzle.project import files
+
+    path = tmp_path / "t.csv"
+    path.write_text("x,T 0,1", encoding="utf-8")
+    at = path.stat().st_mtime_ns
+    first = files.digest(path)
+    path.write_text("x,T 0,2", encoding="utf-8")
+    os.utime(path, ns=(at, at))
+    assert files.digest(path) != first
+    old = at - 60_000_000_000  # a minute old: kept, so a refresh reads nothing
+    os.utime(path, ns=(old, old))
+    files.digest(path)
+    assert files._cache[os.fspath(path)][:2] == (path.stat().st_size, old)
+
+
 # --- BE-2, OP-2 ------------------------------------------------------------------------
 
 

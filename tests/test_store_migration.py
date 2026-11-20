@@ -311,6 +311,13 @@ BUILD = textwrap.dedent(
 def _migration_extra(tmp_path, steps: int) -> tuple[int, int]:
     """(bytes of values, extra bytes while migrating them), each in a fresh process."""
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if sys.platform.startswith("linux"):
+        # Resident memory there counts what the allocators keep after a free (Arrow's
+        # jemalloc for a second, glibc's heap until trimmed): on GitHub's Linux 164 MB
+        # extra for 192 MB of values against 101 for 19. Hand freed memory back at once,
+        # so what is read is what the migration holds.
+        env |= {"ARROW_DEFAULT_MEMORY_POOL": "system", "MALLOC_TRIM_THRESHOLD_": "0",
+                "MALLOC_MMAP_THRESHOLD_": "131072", "MALLOC_ARENA_MAX": "1"}  # fmt: skip
     here, root = str(Path(__file__).parent), str(tmp_path / f"m{steps}")
     run = dict(capture_output=True, text=True, encoding="utf-8", env=env, timeout=600, check=True)
     size = int(subprocess.run([sys.executable, "-c", BUILD, root, str(steps), here], **run).stdout)

@@ -4,8 +4,9 @@ An object's hash covers its settings; a geometry's `source`, a history step's `f
 or `dxf`, an imported field's file and a File operator's pattern are only names. So a
 replaced CAD file left its studies "up to date" and their runs reused. `digests` gives
 each file an object reads its SHA-256, which `graph.content_hashes` puts into that
-object's hash. Hashes are cached by path, size and modification time, so the tree's
-status on every refresh reads no file that hasn't changed.
+object's hash. Hashes are cached by path, size and modification time (once a file is a
+few seconds old: `SETTLED_NS`), so the tree's status on every refresh reads no file that
+hasn't changed.
 
 `copy_in` brings a file from outside into the project folder without ever replacing a
 different file of the same name that something already reads.
@@ -18,6 +19,7 @@ import hashlib
 import os
 import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,11 @@ MISSING = "missing"  # a stable stand-in for a file that isn't there: its proble
 
 _cache: dict[str, tuple[int, int, str]] = {}
 _lock = threading.Lock()
+# A file written twice within one tick of the file system's clock keeps its time, and at
+# the same size looked unchanged (seen on Windows' CI: an edited field file kept its
+# hash). So a hash is kept only once the file is older than any such tick (FAT's is 2 s);
+# one changed more recently is read again each time.
+SETTLED_NS = 3_000_000_000
 
 
 def digest(path: Path) -> str:
@@ -53,8 +60,9 @@ def digest(path: Path) -> str:
                 h.update(chunk)
     except OSError:
         return MISSING
-    with _lock:
-        _cache[key] = (st.st_size, st.st_mtime_ns, h.hexdigest())
+    if time.time_ns() - st.st_mtime_ns > SETTLED_NS:
+        with _lock:
+            _cache[key] = (st.st_size, st.st_mtime_ns, h.hexdigest())
     return h.hexdigest()
 
 
