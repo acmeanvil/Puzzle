@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QStringListModel, Qt, QTimer, Signal
+from PySide6.QtCore import QSize, QStringListModel, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QCompleter,
@@ -36,7 +36,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSplitter,
+    QStyle,
+    QStyleOptionButton,
+    QStyleOptionToolButton,
+    QStylePainter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -206,6 +211,70 @@ class PromptBox(QPlainTextEdit):
         super().insertFromMimeData(source)
 
 
+SEES = "What you have selected and the result shown go with your message; click to leave them out"
+
+
+class Chip(QToolButton):
+    """A button whose words are cut short with "…" when there is no room for them.
+
+    A plain button is as wide as its words, and the words name what is on show: a
+    result's whole name made the panel a thousand pixels wide at least, wider with each
+    result clicked, and never draggable narrower."""
+
+    NARROWEST = 90
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), self.NARROWEST), hint.height())
+
+    def shown_text(self) -> str:
+        """The words as drawn at this width."""
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        spare = super().sizeHint().width() - self.fontMetrics().horizontalAdvance(option.text)
+        return self.fontMetrics().elidedText(
+            option.text, Qt.TextElideMode.ElideRight, max(self.width() - spare, 0)
+        )
+
+    def paintEvent(self, _event) -> None:
+        option = QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.text = self.shown_text()
+        QStylePainter(self).drawComplexControl(QStyle.ComplexControl.CC_ToolButton, option)
+
+
+class Suggestion(QPushButton):
+    """A suggested question, cut short with "…" in a narrow panel (its whole text is its
+    tooltip): a study's long name in one held the panel wide."""
+
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self.setToolTip(text)
+        self.setStyleSheet("text-align: left;")
+        # a push button's own policy takes its size hint as its least width
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(min(hint.width(), Chip.NARROWEST), hint.height())
+
+    def shown_text(self) -> str:
+        spare = super().sizeHint().width() - self.fontMetrics().horizontalAdvance(self.text())
+        return self.fontMetrics().elidedText(
+            self.text(), Qt.TextElideMode.ElideRight, max(self.width() - spare, 0)
+        )
+
+    def paintEvent(self, _event) -> None:
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = self.shown_text()
+        QStylePainter(self).drawControl(QStyle.ControlElement.CE_PushButton, option)
+
+
 def attachments_of(source) -> list:
     """The files in pasted or dropped data: an image as PNG, local files as theirs.
     One that can't be read (too large, not text) is skipped."""
@@ -314,11 +383,10 @@ class AgentPanel(QWidget):
         self.continue_button.clicked.connect(lambda: self.send_continue())
         self.continue_button.hide()
         # What the user is looking at, sent with the message unless switched off (UXA-3).
-        self.context_chip = QToolButton()
+        self.context_chip = Chip()
         self.context_chip.setCheckable(True)
         self.context_chip.setChecked(True)
-        self.context_chip.setToolTip("What you have selected and the result shown go with "
-                                     "your message; click to leave them out")  # fmt: skip
+        self.context_chip.setToolTip(SEES)
         self.context_chip.toggled.connect(lambda _on: self.show_context())
         self.input = PromptBox()
         self.input.submitted.connect(self.send)
@@ -560,6 +628,7 @@ class AgentPanel(QWidget):
             return
         words = chip(self.context())
         self.context_chip.setText(f"Sees: {words}" if words else "Sees: the model")
+        self.context_chip.setToolTip(f"{words}. {SEES}" if words else SEES)  # cut short when narrow
 
     def _show_suggestions(self, on: bool = True) -> None:
         while self.suggestions.count():
@@ -581,8 +650,7 @@ class AgentPanel(QWidget):
         role(head, "muted")
         self.suggestions.addWidget(head)
         for text in suggestions(s.project, runs):
-            b = QPushButton(text)
-            b.setStyleSheet("text-align: left;")
+            b = Suggestion(text)
             b.clicked.connect(lambda _=False, text=text: self.send(text))
             self.suggestions.addWidget(b)
         self.suggestions_box.show()

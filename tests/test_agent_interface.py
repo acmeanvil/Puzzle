@@ -656,3 +656,41 @@ def test_the_new_eval_tasks_pass_for_a_correct_agent_and_fail_otherwise(tmp_path
     out = run_task(_task("injected log"), ScriptedProvider(gullible), tmp_path)
     assert out.passed and "proposed, not applied" in out.detail  # the gate held
     assert {"memory", "assembly", "injection"} <= set(FAMILIES)
+
+
+def test_long_words_never_hold_the_agent_panel_wide():
+    """The chip named the result on show in full, so each result clicked made the panel
+    wider (past 1000 px) and it could not be dragged back (the maintainer, 2026-11-19)."""
+    from PySide6.QtWidgets import QApplication
+
+    from puzzle.gui.agent_panel import Chip, Suggestion
+
+    app = QApplication.instance() or QApplication([])
+    words = "Sees: " + " · ".join(
+        ["Pressure_vessel_Code_aster", "Equivalent (von Mises) stress"] * 3
+    )
+    made = []
+    try:
+        for button in (Chip(), Suggestion(words)):
+            made.append(button)
+            button.setText(words)
+            assert button.minimumSizeHint().width() <= Chip.NARROWEST
+            from PySide6.QtWidgets import QSizePolicy
+
+            # a policy without the shrink flag makes a layout take sizeHint as the least
+            assert (
+                button.sizePolicy().horizontalPolicy().value
+                & QSizePolicy.PolicyFlag.ShrinkFlag.value
+            )
+            assert button.text() == words  # what tests and screen readers read
+            button.resize(200, 30)
+            assert button.shown_text().endswith("…") and len(button.shown_text()) < len(words)
+            button.resize(button.sizeHint().width(), 30)
+            assert button.shown_text() == words
+            button.show()
+            button.grab()  # drawn without error
+    finally:
+        for button in made:
+            button.hide()
+            button.deleteLater()
+        app.processEvents()
